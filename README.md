@@ -1,0 +1,53 @@
+# VoxelCraft
+
+A Minecraft-style voxel sandbox that runs in the browser, built with [Three.js](https://threejs.org/). No build step and no dependencies to install.
+
+## Run it
+
+ES modules need to be served over HTTP (opening `index.html` directly from disk won't work):
+
+```sh
+python3 -m http.server 8000
+# then open http://localhost:8000
+```
+
+Any static file server works (`npx serve`, VS Code Live Server, GitHub Pages, …).
+
+## Features
+
+- Infinite, seeded terrain streamed in 16×16×96 chunks: plains, beaches, oceans, forests, snowy mountains
+- Caves, coal and iron ore, bedrock floor
+- Procedurally painted pixel-art textures (no image files)
+- Face-culled chunk meshes with smooth ambient occlusion
+- Translucent water you can swim in, with an underwater fog effect
+- Walking, sprinting, jumping, flying, and AABB collision
+- Breaking, placing, and picking blocks, with a 9-slot hotbar
+- Day/night cycle with a square sun and moon
+- Saves automatically to `localStorage` (world edits, position, time, hotbar)
+
+## Controls
+
+| Key | Action |
+| --- | --- |
+| WASD | Move |
+| Space | Jump / swim / fly up |
+| Shift | Sprint / fly down |
+| F | Toggle flying |
+| Left click | Break block |
+| Right click | Place block |
+| Middle click | Pick block into hotbar |
+| 1–9, mouse wheel | Select hotbar slot |
+| F3 | Debug overlay |
+| Esc | Pause |
+
+## Code layout
+
+| File | Purpose |
+| --- | --- |
+| `src/main.js` | Renderer, input, block interaction, sky, game loop, saving |
+| `src/world.js` | Chunk storage, terrain generation, meshing, raycasting |
+| `src/player.js` | First-person movement and collision |
+| `src/blocks.js` | Block definitions |
+| `src/textures.js` | Procedural texture atlas |
+| `src/noise.js` | Seeded simplex noise and hashing |
+| `src/hud.js` | Hotbar and debug overlay |

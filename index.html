@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VoxelCraft</title>
+  <link rel="stylesheet" href="style.css">
+  <script type="importmap">
+    { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+  </script>
+</head>
+<body>
+  <div id="game"></div>
+
+  <div id="underwater" class="hidden"></div>
+  <div id="crosshair"></div>
+  <div id="block-name"></div>
+  <div id="hotbar"></div>
+  <pre id="debug" class="hidden"></pre>
+
+  <div id="menu">
+    <div class="panel">
+      <h1>VoxelCraft</h1>
+      <button id="play">Play</button>
+      <button id="new-world" class="secondary">New World</button>
+      <table class="controls">
+        <tr><td>WASD</td><td>Move</td></tr>
+        <tr><td>Space</td><td>Jump / swim / fly up</td></tr>
+        <tr><td>Shift</td><td>Sprint / fly down</td></tr>
+        <tr><td>F</td><td>Toggle flying</td></tr>
+        <tr><td>Left click</td><td>Break block</td></tr>
+        <tr><td>Right click</td><td>Place block</td></tr>
+        <tr><td>Middle click</td><td>Pick block</td></tr>
+        <tr><td>1–9 / wheel</td><td>Select block</td></tr>
+        <tr><td>F3</td><td>Debug info</td></tr>
+        <tr><td>Esc</td><td>Pause</td></tr>
+      </table>
+      <p class="note">Your world saves automatically in this browser.</p>
+    </div>
+  </div>
+
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>
