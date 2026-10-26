@@ -75,8 +75,10 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #000; font-f
 .available { background: rgba(0, 0, 0, 0.3); border: 1px solid #2c4a60; padding: 8px; min-height: 120px; }
 .available .tiles { display: flex; flex-direction: column; gap: 4px; max-height: 320px; overflow-y: auto; }
 .available .empty { color: #8aa; font-size: 13px; margin: 8px 0; }
-.keys { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-areas: ". w ." "a s d"; gap: 8px; }
-.key-w { grid-area: w; } .key-a { grid-area: a; } .key-s { grid-area: s; } .key-d { grid-area: d; }
+.keys { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-areas: "q w e" "a s d"; gap: 8px; }
+.key-q { grid-area: q; } .key-w { grid-area: w; } .key-e { grid-area: e; }
+.key-a { grid-area: a; } .key-s { grid-area: s; } .key-d { grid-area: d; }
+.keybox .hint { align-self: center; margin: -4px 0 2px; font-size: 10px; color: #8aa; text-transform: uppercase; letter-spacing: 1px; }
 .keybox { min-height: 120px; background: rgba(0, 0, 0, 0.35); border: 2px dashed #3f6f8f; padding: 6px; display: flex; flex-direction: column; gap: 4px; }
 .keybox.over { border-color: #7fe8c8; background: rgba(60, 220, 170, 0.15); }
 .keycap { align-self: center; width: 34px; height: 34px; display: grid; place-items: center; font-size: 18px; font-weight: bold;
@@ -88,6 +90,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #000; font-f
 }
 .tile:hover, .chip:hover { border-color: #ffa040; background: rgba(120, 80, 40, 0.6); }
 .chip { cursor: pointer; font-size: 11px; }
+.tile i, .chip i { color: #9fb8c8; font-style: normal; }
 .tile canvas, .chip canvas { width: 24px; height: 24px; image-rendering: pixelated; flex: none; }
 .console-buttons { display: flex; gap: 8px; }
 .console-buttons button { flex: 1; margin: 0; }

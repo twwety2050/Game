@@ -1,5 +1,5 @@
 // The navigation console screen: lists the ship's thrusters and lets you drag copies of them
-// onto the W, A, S, and D boxes. At the helm, holding a key fires every thruster in its box.
+// onto the Q, W, E, A, S, and D boxes. At the helm, holding a key fires every thruster in its box.
 import { applyRotation } from './shapes.js';
 import { CONTROL_KEYS } from './ship.js';
 
@@ -77,6 +77,19 @@ export class NavConsoleUI {
     return DIRECTIONS[scores.indexOf(Math.max(...scores))];
   }
 
+  // Where a thruster sits on the ship, from the pilot's point of view (ignoring the axis it
+  // pushes along), e.g. "left side". Empty if it's near the centre.
+  locate(t) {
+    const com = this.ship.com;
+    const offset = [t.x + 0.5 - com.x, t.y + 0.5 - com.y, t.z + 0.5 - com.z];
+    const { forward, right, up } = this.axes;
+    const along = [[dot(offset, right), 'right side', 'left side'], [dot(offset, forward), 'front', 'rear'], [dot(offset, up), 'top', 'bottom']]
+      .filter(([, pos]) => Math.abs(dot(t.nozzle, pos === 'right side' ? right : pos === 'front' ? forward : up)) < 0.5);
+    along.sort((a, b) => Math.abs(b[0]) - Math.abs(a[0]));
+    const [d, pos, neg] = along[0];
+    return Math.abs(d) < 1 ? '' : d > 0 ? pos : neg;
+  }
+
   bind(key, thruster) {
     if (!this.bindings[key].includes(thruster)) this.bindings[key].push(thruster);
     this.render();
@@ -89,15 +102,17 @@ export class NavConsoleUI {
 
   makeTile(t, from) {
     const [name, arrow] = this.describe(t);
+    const where = this.locate(t);
     const el = document.createElement('div');
     el.className = from ? 'chip' : 'tile';
     el.draggable = true;
-    el.title = from ? `Thruster ${t.number}: pushes ${name.toLowerCase()} (click to remove)` : `Thruster ${t.number}: pushes ${name.toLowerCase()}`;
+    const info = `Thruster ${t.number}: pushes ${name.toLowerCase()}${where ? `, mounted on the ${where}` : ''}`;
+    el.title = from ? `${info} (click to remove)` : info;
     const icon = document.createElement('canvas');
     icon.width = icon.height = 32;
     icon.getContext('2d').drawImage(this.icon, 0, 0, 32, 32);
     const label = document.createElement('span');
-    label.innerHTML = `<b>T${t.number}</b> ${arrow} ${name}`;
+    label.innerHTML = `<b>T${t.number}</b> ${arrow} ${name}${where ? ` <i>· ${where}</i>` : ''}`;
     el.append(icon, label);
     el.addEventListener('dragstart', (e) => {
       e.dataTransfer.setData('application/json', JSON.stringify({ thruster: t.key, from }));

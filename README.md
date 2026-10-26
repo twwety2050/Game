@@ -35,7 +35,7 @@ Any static file server works (`npx serve`, VS Code Live Server, GitHub Pages, â€
 - Gravity in any of the six axis directions, with the player smoothly reorienting to the new "down"
 - Ships: free-moving block grids you can stand on, walk around, fly, and rebuild while they move.
 - Thrusters push their ship away from their nozzle, from where they're mounted (so off-centre ones turn it).
-  A navigation console maps them to W/A/S/D: drag thrusters from its list onto the key boxes, take the helm,
+  A navigation console maps them to Q/W/E/A/S/D: drag thrusters from its list onto the key boxes, take the helm,
   and holding a key fires everything bound to it
   You ride along with a ship exactly (no sliding off), and neither you nor other ships can pass through it
 - Mining (hold to break, with crack stages), placing, and picking blocks, with a 9-slot hotbar and a block inventory
@@ -55,9 +55,9 @@ Any static file server works (`npx serve`, VS Code Live Server, GitHub Pages, â€
 | F | Toggle flying |
 | T / Shift+T | Rotate the shaped block you're looking at / move its base to the next face (for gravity plates and slopes: change which way they pull) |
 | WASD / Space / Shift (zero-g) | Jetpack |
-| N | Spawn a starter ship (console + four thrusters, already mapped) |
+| N | Spawn a starter ship (console + thrusters for moving, steering, and rolling, already mapped) |
 | R | Open the navigation console you're looking at / leave the helm |
-| W / A / S / D (at the helm) | Fire the thrusters bound to that key |
+| Q / W / E / A / S / D (at the helm) | Fire the thrusters bound to that key (Q/E are meant for rolling) |
 | Left click (hold) | Mine block |
 | Right click | Place block |
 | Middle click | Pick block into hotbar |

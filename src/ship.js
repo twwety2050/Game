@@ -37,7 +37,7 @@ const SLEEP_SPEED = 0.12;    // below this (and spin), a supported ship starts t
 const SLEEP_TIME = 0.5;
 const WATER_DRAG = 4;        // velocity damping per second when fully submerged
 export const THRUST = 400;   // force of one thruster (mass x blocks/s^2)
-export const CONTROL_KEYS = ['W', 'A', 'S', 'D'];
+export const CONTROL_KEYS = ['Q', 'W', 'E', 'A', 'S', 'D'];
 
 // Flame shown at a firing thruster's nozzle: a cone pointing out along +Y, glowing additively.
 const FLAME_GEOMETRY = new THREE.ConeGeometry(0.22, 1.1, 10, 1, true).translate(0, 0.55, 0);
@@ -88,7 +88,7 @@ export class Ship extends VoxelGrid {
     this.piloted = false;                // someone is at the helm (keeps the ship awake)
     this.thrusters = new Map();          // "x,y,z" -> { x, y, z, nozzle: [dx, dy, dz] } (local)
     this.firing = new Set();             // keys of thrusters firing this frame
-    this.consoles = new Map();           // console "x,y,z" -> { W: [thruster keys], A, S, D }
+    this.consoles = new Map();           // console "x,y,z" -> { Q: [thruster keys], W, E, A, S, D }
     this.flames = new Map();             // thruster key -> flame mesh
 
     this.invInertiaLocal = new THREE.Matrix3(); // inverse inertia tensor about the centre of mass
@@ -506,13 +506,15 @@ export class Ship extends VoxelGrid {
 
   // ---------- thrusters & consoles ----------
 
-  // The key bindings of the console at local (x, y, z), created empty on first use.
+  // The key bindings of the console at local (x, y, z), created empty on first use. Keys
+  // added since a console was saved start out empty.
   consoleBindings(key) {
     let b = this.consoles.get(key);
     if (!b) {
-      b = Object.fromEntries(CONTROL_KEYS.map((k) => [k, []]));
+      b = {};
       this.consoles.set(key, b);
     }
+    for (const k of CONTROL_KEYS) b[k] ??= [];
     return b;
   }
 

@@ -265,7 +265,8 @@ document.addEventListener('contextmenu', (e) => e.preventDefault());
 document.addEventListener('wheel', (e) => { if (locked) hud.scroll(Math.sign(e.deltaY)); }, { passive: true });
 
 addEventListener('keydown', (e) => {
-  if (e.code === 'KeyE' && !e.repeat && overlay !== 'console') {
+  // At the helm, E fires thrusters instead of opening the inventory.
+  if (e.code === 'KeyE' && !e.repeat && overlay !== 'console' && !player.piloting) {
     if (overlay === 'inventory') closeOverlay();
     else if (locked) openOverlay('inventory');
     return;
@@ -427,14 +428,23 @@ function spawnShip() {
   const bow = rotationFor([0, -1, 0], [0, 0, -1]);
   for (let x = -2; x <= 2; x++) ship.setBlock(x, 0, -4, B.HULL_SLOPE, { meta: bow, remesh: false });
   // A console at the stern facing aft (stand behind it to fly), a main engine on the stern,
-  // a reverse thruster at the bow, and two side thrusters at the bow for steering.
+  // a reverse thruster at the bow, two side thrusters at the bow for steering, and two pairs
+  // of up/down thrusters along the sides for rolling.
   ship.setBlock(0, 1, 2, B.NAV_CONSOLE, { meta: rotationFor([0, -1, 0], [0, 0, 1]), remesh: false });
   const thruster = (x, y, z, base) => ship.setBlock(x, y, z, B.THRUSTER, { meta: rotationFor(base, base[1] ? [0, 0, 1] : [0, 1, 0]), remesh: false });
   thruster(0, 0, 4, [0, 0, -1]);  // nozzle aft: pushes forward
   thruster(0, 1, -3, [0, 0, 1]);  // nozzle forward: pushes back
   thruster(3, 0, -3, [-1, 0, 0]); // nozzle starboard: swings the bow to port
   thruster(-3, 0, -3, [1, 0, 0]); // nozzle port: swings the bow to starboard
-  Object.assign(ship.consoleBindings('0,1,2'), { W: ['0,0,4'], S: ['0,1,-3'], A: ['3,0,-3'], D: ['-3,0,-3'] });
+  thruster(-3, 0, 0, [0, 1, 0]);  // port, nozzle down: lifts the port side
+  thruster(3, 0, 0, [0, -1, 0]);  // starboard, nozzle up: pushes the starboard side down
+  thruster(-3, 0, 1, [0, -1, 0]); // port, nozzle up
+  thruster(3, 0, 1, [0, 1, 0]);   // starboard, nozzle down
+  Object.assign(ship.consoleBindings('0,1,2'), {
+    W: ['0,0,4'], S: ['0,1,-3'], A: ['3,0,-3'], D: ['-3,0,-3'],
+    Q: ['-3,0,1', '3,0,1'], // roll left
+    E: ['-3,0,0', '3,0,0'], // roll right
+  });
 
   const forward = tmpA, right = tmpB;
   player.moveBasis(forward, right);
@@ -596,7 +606,7 @@ function updateStatus() {
     else if (player.gravityStrength < 0.97 && !player.flying) text = `Gravity ${Math.round(player.gravityStrength * 100)}%`;
   }
   if (ship && player.piloting) {
-    text = `AT THE HELM  ${ship.velocity.length().toFixed(1)} m/s  ·  W A S D fire thrusters  ·  R leave the helm`;
+    text = `AT THE HELM  ${ship.velocity.length().toFixed(1)} m/s  ·  Q W E A S D fire thrusters  ·  R leave the helm`;
   } else if (ship) {
     const drift = ship.velocity.length();
     text = `Aboard ship${drift > 0.05 ? ` (drifting ${drift.toFixed(1)} m/s)` : ''}  ·  R at a navigation console to fly${text ? `  ·  ${text}` : ''}`;
