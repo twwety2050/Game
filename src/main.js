@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { createAtlas } from './textures.js';
 import { B, BLOCKS, HOTBAR } from './blocks.js';
 import { World, CS } from './world.js';
+import { Ship } from './ship.js';
 import { Player } from './player.js';
 import { Hud } from './hud.js';
 
@@ -9,6 +10,9 @@ const SAVE_KEY = 'voxelcraft-save-v2';
 const REACH = 6;
 const DAY_LENGTH = 600; // seconds for a full day/night cycle
 const RENDER_DISTANCE = 3; // in chunks, on every axis
+const SHIP_ACCEL = 12;     // blocks/s^2 of thrust while piloting
+const SHIP_MAX_SPEED = 40;
+const SHIP_TURN_RATE = 0.8; // radians/s
 
 let save = null;
 try { save = JSON.parse(localStorage.getItem(SAVE_KEY)); } catch { save = null; }
@@ -56,7 +60,8 @@ scene.add(highlight);
 // ---------- game objects ----------
 
 const world = new World(scene, solidMat, waterMat, seed, save?.edits, RENDER_DISTANCE);
-const player = new Player(camera, world);
+const ships = (save?.ships ?? []).map((data) => Ship.deserialize(data, scene, solidMat, waterMat));
+const player = new Player(camera, world, ships);
 if (save?.player) player.restore(save.player);
 else player.spawn(world.findSpawn());
 player.syncCamera();
@@ -69,6 +74,7 @@ function persist() {
   try {
     localStorage.setItem(SAVE_KEY, JSON.stringify({
       seed, time, edits: world.serializeEdits(), player: player.serialize(), hotbar: hud.items,
+      ships: ships.map((ship) => ship.serialize()),
     }));
   } catch (e) {
     console.warn('Could not save world', e);
@@ -125,6 +131,15 @@ addEventListener('keydown', (e) => {
     else if (!player.up.equals(new THREE.Vector3(target.nx, target.ny, target.nz))) hud.toast('No room to turn');
   } else if (e.code === 'KeyH' && locked) {
     if (player.setUp(new THREE.Vector3(0, 1, 0))) hud.toast('Gravity reset');
+  } else if (e.code === 'KeyN' && locked) {
+    spawnShip();
+  } else if (e.code === 'KeyR' && locked) {
+    if (player.ref) {
+      player.piloting = !player.piloting;
+      hud.toast(player.piloting ? 'Piloting' : 'Left the controls');
+    } else {
+      hud.toast('Stand on a ship to pilot it');
+    }
   } else if (e.code === 'F3') {
     e.preventDefault();
     showDebug = !showDebug;
@@ -142,20 +157,110 @@ addEventListener('resize', () => {
 
 let target = null;
 const tmpDir = new THREE.Vector3();
+const tmpA = new THREE.Vector3();
+const tmpB = new THREE.Vector3();
+
+// Nearest block hit across the static world and every ship.
+function raycastAll(origin, dir) {
+  let best = world.raycast(origin, dir, REACH);
+  if (best) best.grid = world;
+  for (const ship of ships) {
+    const hit = ship.raycast(ship.worldToLocal(origin, tmpA), ship.dirToLocal(dir, tmpB), best ? best.t : REACH);
+    if (hit && (!best || hit.t < best.t)) { hit.grid = ship; best = hit; }
+  }
+  return best;
+}
 
 function act(button) {
   if (!target) return;
+  const grid = target.grid;
   if (button === 0) {
-    if (BLOCKS[target.id].breakable) world.setBlock(target.x, target.y, target.z, B.AIR);
+    if (!BLOCKS[target.id].breakable) return;
+    grid.setBlock(target.x, target.y, target.z, B.AIR);
+    if (grid instanceof Ship && grid.blockCount === 0) removeShip(grid);
   } else if (button === 2) {
     const x = target.x + target.nx, y = target.y + target.ny, z = target.z + target.nz;
-    const existing = world.getBlock(x, y, z);
+    const existing = grid.getBlock(x, y, z);
     if (existing !== B.AIR && !BLOCKS[existing].liquid) return;
-    if (BLOCKS[hud.current].solid && player.intersectsBlock(x, y, z)) return;
-    world.setBlock(x, y, z, hud.current);
+    if (BLOCKS[hud.current].solid && player.overlapsBlock(grid, x, y, z)) return;
+    grid.setBlock(x, y, z, hud.current);
   } else if (button === 1) {
     hud.setItem(target.id);
   }
+}
+
+// ---------- ships ----------
+
+// Spawn a small starter deck in front of the player, level with (or just above) their feet
+// and aligned with their current gravity.
+function spawnShip() {
+  const ship = new Ship(scene, solidMat, waterMat);
+  for (let x = -2; x <= 2; x++) for (let z = -3; z <= 3; z++) ship.setBlock(x, 0, z, B.PLANKS, { remesh: false });
+  ship.setBlock(0, 0, -3, B.COBBLE, { remesh: false }); // marks the bow
+
+  const forward = tmpA, right = tmpB;
+  player.moveBasis(forward, right);
+  const g = player.grid;
+  const feet = player.worldPosition(new THREE.Vector3());
+  const fwd = g.dirToWorld(forward, new THREE.Vector3());
+  const up = g.dirToWorld(player.up, new THREE.Vector3());
+  for (let lift = 0.5; lift <= 6.5; lift++) {
+    // Rotate the deck so its bow points where the player faces.
+    const yaw = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), player.yaw);
+    ship.quaternion.copy(player.grid.quaternion).multiply(player.frame).multiply(yaw);
+    ship.position.copy(feet).addScaledVector(fwd, 6).addScaledVector(up, lift);
+    ship.syncTransform();
+    if (!ship.intersectsAnything(world, ships)) {
+      ship.remeshAll();
+      ships.push(ship);
+      hud.toast('Ship spawned');
+      return;
+    }
+  }
+  ship.dispose();
+  hud.toast('No room for a ship here');
+}
+
+function removeShip(ship) {
+  if (player.ref === ship) player.setReference(null);
+  ship.dispose();
+  ships.splice(ships.indexOf(ship), 1);
+}
+
+const thrust = new THREE.Vector3();
+const spin = new THREE.Vector3();
+
+// Fly the ship the player is standing on. Thrust follows the player's view; with no input
+// the inertial dampeners bring it to rest. Leave the controls and it keeps drifting.
+function pilotShip(dt) {
+  const ship = player.ref;
+  if (!ship) { player.piloting = false; return; }
+  if (!player.piloting) return;
+  const k = player.keys;
+  const forward = tmpA, right = tmpB;
+  player.moveBasis(forward, right);
+  thrust.set(0, 0, 0);
+  if (k.has('KeyW')) thrust.add(forward);
+  if (k.has('KeyS')) thrust.sub(forward);
+  if (k.has('KeyD')) thrust.add(right);
+  if (k.has('KeyA')) thrust.sub(right);
+  if (k.has('Space')) thrust.add(player.up);
+  if (k.has('ShiftLeft') || k.has('ShiftRight')) thrust.sub(player.up);
+
+  if (k.has('KeyX')) {
+    ship.velocity.multiplyScalar(Math.exp(-6 * dt));
+  } else if (thrust.lengthSq() > 0) {
+    ship.velocity.addScaledVector(ship.dirToWorld(thrust.normalize(), thrust), SHIP_ACCEL * dt);
+  } else {
+    ship.velocity.multiplyScalar(Math.exp(-1.5 * dt));
+  }
+  if (ship.velocity.length() > SHIP_MAX_SPEED) ship.velocity.setLength(SHIP_MAX_SPEED);
+  if (ship.velocity.lengthSq() < 1e-4 && thrust.lengthSq() === 0) ship.velocity.set(0, 0, 0);
+
+  const turn = (k.has('KeyQ') ? 1 : 0) - (k.has('KeyE') ? 1 : 0);
+  ship.dirToWorld(player.up, spin).multiplyScalar(turn * SHIP_TURN_RATE);
+  ship.angularVelocity.lerp(spin, Math.min(1, 4 * dt));
+  if (!turn && ship.angularVelocity.lengthSq() < 1e-6) ship.angularVelocity.set(0, 0, 0);
 }
 
 // ---------- sky ----------
@@ -209,16 +314,28 @@ function frame(now) {
   const dt = Math.min((now - last) / 1000, 0.1);
   last = now;
 
-  world.update(player.pos.x, player.pos.y, player.pos.z, 8);
+  const wp = player.worldPosition(new THREE.Vector3());
+  world.update(wp.x, wp.y, wp.z, 8);
+
+  if (locked) {
+    pilotShip(dt);
+    for (const ship of ships) {
+      if (ship.update(dt, world, ships) === 'collided' && ship === player.ref) hud.toast('Collision!');
+    }
+  }
 
   // Hold physics until the chunk under the player exists, so we never fall through the world.
-  if (locked && world.getChunkAt(player.pos.x, player.pos.y, player.pos.z)) player.update(dt);
+  if (locked && (player.ref || world.getChunkAt(wp.x, wp.y, wp.z))) player.update(dt);
   else player.syncCamera();
 
   camera.getWorldDirection(tmpDir);
-  target = world.raycast(camera.position, tmpDir, REACH);
+  target = raycastAll(camera.position, tmpDir);
   highlight.visible = !!target;
-  if (target) highlight.position.set(target.x + 0.5, target.y + 0.5, target.z + 0.5);
+  if (target) {
+    target.grid.localToWorld(tmpA.set(target.x + 0.5, target.y + 0.5, target.z + 0.5), highlight.position);
+    highlight.quaternion.copy(target.grid.quaternion);
+  }
+  updateStatus();
 
   for (const [button, t] of held) {
     const next = t - dt;
@@ -232,12 +349,14 @@ function frame(now) {
   fpsTimer += dt;
   if (fpsTimer >= 0.5) { fps = Math.round(frames / fpsTimer); frames = 0; fpsTimer = 0; }
   if (showDebug) {
-    const p = player.pos;
+    const p = wp;
+    const ship = player.ref;
     hud.setDebug([
       `VoxelCraft  ${fps} fps`,
       `XYZ: ${p.x.toFixed(2)} / ${p.y.toFixed(2)} / ${p.z.toFixed(2)}`,
       `Chunk: ${Math.floor(p.x / CS)}, ${Math.floor(p.y / CS)}, ${Math.floor(p.z / CS)}   loaded: ${world.chunks.size}`,
-      `Facing: ${target ? `${BLOCKS[target.id].name} @ ${target.x} ${target.y} ${target.z}` : '-'}`,
+      `Facing: ${target ? `${BLOCKS[target.id].name} @ ${target.x} ${target.y} ${target.z}${target.grid === world ? '' : ' (ship)'}` : '-'}`,
+      `Ships: ${ships.length}   riding: ${ship ? `ship #${ships.indexOf(ship)} (${ship.blockCount} blocks, ${ship.velocity.length().toFixed(1)} m/s)` : 'world'}`,
       `Mode: ${player.flying ? 'flying' : player.inWater ? 'swimming' : 'walking'}   gravity: ${player.gravityLabel()}   seed: ${seed}`,
       `Draw calls: ${renderer.info.render.calls}  tris: ${renderer.info.render.triangles}`,
     ].join('\n'));
@@ -245,5 +364,19 @@ function frame(now) {
 }
 requestAnimationFrame(frame);
 
+const statusEl = document.getElementById('status');
+function updateStatus() {
+  const ship = player.ref;
+  let text = '';
+  if (ship && player.piloting) {
+    text = `PILOTING  ${ship.velocity.length().toFixed(1)} m/s  ·  WASD / Space / Shift thrust  ·  Q/E turn  ·  X brake  ·  R leave controls`;
+  } else if (ship) {
+    const drift = ship.velocity.length();
+    text = `Aboard ship${drift > 0.05 ? ` (drifting ${drift.toFixed(1)} m/s)` : ''}  ·  R to pilot`;
+  }
+  if (statusEl.textContent !== text) statusEl.textContent = text;
+  statusEl.classList.toggle('hidden', !text);
+}
+
 // Exposed for debugging from the browser console.
-window.game = { world, player, hud, camera, renderer };
+window.game = { world, ships, player, hud, camera, renderer, spawnShip, removeShip, pilotShip };

@@ -28,7 +28,8 @@ Minecraft's core systems (a voxel world, building block by block, crafting) but 
 3. **Space world:** replace terrain generation with empty space, stars, and (eventually) large bodies. The world is
    already infinite on all three axes (cubic 32×32×32 chunks), so this only changes what gets generated.
 4. **Zero-g movement and gravity plates:** drifting movement, plus gravity plates that create local gravity.
-5. **Ships:** turn a group of blocks into a ship entity that can be piloted and moved as one.
+5. **Ships:** turn a group of blocks into a ship entity that can be piloted and moved as one. *Started:* ships are
+   moving block grids you can ride, pilot, and rebuild while they move (spawned with N for now).
 6. **Body gravity:** large bodies attract the player and objects according to their mass and distance.
 
 ## Open questions
