@@ -1,10 +1,10 @@
-// DOM overlay: hotbar with isometric block icons, selected block name, and debug text.
+// DOM overlay: hotbar, block inventory, selected block name, and debug text.
 import { BLOCKS } from './blocks.js';
-import { ATLAS, TILE } from './textures.js';
 
 export class Hud {
-  constructor(atlas, items) {
-    this.atlas = atlas;
+  // icons: Map(block id -> canvas with a rendered picture of the block)
+  constructor(icons, items) {
+    this.icons = icons;
     this.items = items.slice();
     this.selected = 0;
     this.slots = [];
@@ -55,26 +55,30 @@ export class Hud {
   }
 
   drawIcon(i) {
-    const def = BLOCKS[this.items[i]];
     const ctx = this.slots[i].canvas.getContext('2d');
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, 48, 48);
-    ctx.imageSmoothingEnabled = false;
-    const s = 1 / TILE;
-    const face = (tile, m, shade) => {
-      ctx.save();
-      ctx.setTransform(...m);
-      ctx.drawImage(this.atlas, (tile % ATLAS) * TILE, Math.floor(tile / ATLAS) * TILE, TILE, TILE, 0, 0, TILE, TILE);
-      if (shade) {
-        ctx.globalCompositeOperation = 'source-atop';
-        ctx.fillStyle = `rgba(0,0,0,${shade})`;
-        ctx.fillRect(0, 0, TILE, TILE);
-      }
-      ctx.restore();
-    };
-    face(def.side, [20 * s, 10 * s, 0, 22 * s, 4, 14], 0.25);   // left
-    face(def.side, [20 * s, -10 * s, 0, 22 * s, 24, 24], 0.45); // right
-    face(def.top, [20 * s, -10 * s, 20 * s, 10 * s, 4, 14], 0);  // top
+    const icon = this.icons.get(this.items[i]);
+    if (icon) ctx.drawImage(icon, 0, 0, 48, 48);
+  }
+
+  // Fill the inventory screen with every placeable block. `onPick(id)` is called on click.
+  buildInventory(onPick) {
+    const grid = document.querySelector('#inventory .items');
+    grid.textContent = '';
+    for (const def of BLOCKS) {
+      if (!def?.placeable) continue;
+      const item = document.createElement('button');
+      item.className = 'item';
+      item.title = def.name;
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 48;
+      canvas.getContext('2d').drawImage(this.icons.get(def.id), 0, 0, 48, 48);
+      const label = document.createElement('span');
+      label.textContent = def.name;
+      item.append(canvas, label);
+      item.addEventListener('click', () => onPick(def.id));
+      grid.appendChild(item);
+    }
   }
 
   setDebug(text) {

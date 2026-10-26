@@ -26,7 +26,10 @@ Any static file server works (`npx serve`, VS Code Live Server, GitHub Pages, â€
 - Gravity in any of the six axis directions, with the player smoothly reorienting to the new "down"
 - Ships: free-moving block grids you can stand on, walk around, pilot, and rebuild while they move.
   You ride along with a ship exactly (no sliding off), and neither you nor other ships can pass through it
-- Breaking, placing, and picking blocks, with a 9-slot hotbar
+- Mining (hold to break, with crack stages), placing, and picking blocks, with a 9-slot hotbar and a block inventory
+- Ship hull: metal blocks in six shapes (full block, half block, plate, 45Â° slope, and a two-piece 26.6Â° slope)
+  that orient to the surface you place them on. Hull damage is permanent: cracks stay and are saved
+- Walking up half blocks and slopes without jumping
 - Day/night cycle with a square sun and moon
 - Saves automatically to `localStorage` (world edits, position, time, hotbar)
 
@@ -45,10 +48,11 @@ Any static file server works (`npx serve`, VS Code Live Server, GitHub Pages, â€
 | WASD / Space / Shift (piloting) | Thrust forward/back/sideways/up/down, relative to where you face |
 | Q / E (piloting) | Turn the ship |
 | X (piloting) | Brake |
-| Left click | Break block |
+| Left click (hold) | Mine block |
 | Right click | Place block |
 | Middle click | Pick block into hotbar |
 | 1â€“9, mouse wheel | Select hotbar slot |
+| E | Block inventory (click a block to put it in the selected slot) |
 | F3 | Debug overlay |
 | Esc | Pause |
 
@@ -61,7 +65,8 @@ Any static file server works (`npx serve`, VS Code Live Server, GitHub Pages, â€
 | `src/world.js` | The static world: terrain generation, chunk streaming, saved edits |
 | `src/ship.js` | Ships: moving grids with position, rotation, velocity, and collision |
 | `src/player.js` | First-person movement, collision, gravity frame, and riding ships |
-| `src/blocks.js` | Block definitions |
+| `src/blocks.js` | Block definitions (hardness, shape, permanent damage) |
+| `src/shapes.js` | Block shapes (slabs, plates, slopes): geometry, collision boxes, 24 orientations |
 | `src/textures.js` | Procedural texture atlas |
 | `src/noise.js` | Seeded simplex noise and hashing |
 | `src/hud.js` | Hotbar and debug overlay |

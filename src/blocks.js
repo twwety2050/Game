@@ -1,15 +1,19 @@
 // Block registry. Texture values are tile indices into the generated atlas (see textures.js).
+import { SHAPE } from './shapes.js';
 
 export const B = {
   AIR: 0, GRASS: 1, DIRT: 2, STONE: 3, SAND: 4, LOG: 5, LEAVES: 6, PLANKS: 7,
   COBBLE: 8, GLASS: 9, WATER: 10, BEDROCK: 11, BRICK: 12, SNOW: 13, COAL_ORE: 14, IRON_ORE: 15,
+  HULL: 16, HULL_SLAB: 17, HULL_PLATE: 18, HULL_SLOPE: 19, HULL_SLOPE_LOW: 20, HULL_SLOPE_HIGH: 21,
 };
 
 export const T = {
   GRASS_TOP: 0, GRASS_SIDE: 1, DIRT: 2, STONE: 3, SAND: 4, LOG_SIDE: 5, LOG_TOP: 6, LEAVES: 7,
   PLANKS: 8, COBBLE: 9, GLASS: 10, WATER: 11, BEDROCK: 12, BRICK: 13, SNOW: 14, SNOW_SIDE: 15,
-  COAL_ORE: 16, IRON_ORE: 17,
+  COAL_ORE: 16, IRON_ORE: 17, HULL: 18,
+  CRACK: 24, // 8 crack stages: tiles 24..31
 };
+export const CRACK_STAGES = 8;
 
 export const BLOCKS = [];
 
@@ -24,26 +28,40 @@ function def(id, name, tex, opts = {}) {
     opaque: opts.opaque ?? true,        // hides neighbouring faces
     liquid: opts.liquid ?? false,
     selfFaces: opts.selfFaces ?? false, // draw faces between two blocks of this type (leaves)
-    occludes: opts.occludes ?? (opts.opaque ?? true), // casts ambient occlusion
+    shape: opts.shape ?? SHAPE.FULL,
+    // Shaped blocks don't fill their cell, so they cast no ambient occlusion.
+    occludes: opts.occludes ?? ((opts.opaque ?? true) && (opts.shape ?? SHAPE.FULL) === SHAPE.FULL),
     breakable: opts.breakable ?? true,
+    hardness: opts.hardness ?? 1,                 // seconds to break by hand
+    permanentDamage: opts.permanentDamage ?? false, // cracks stay when you stop mining
+    placeable: opts.placeable ?? true,            // shown in the inventory
   };
 }
 
-def(B.AIR, 'Air', { all: 0 }, { solid: false, opaque: false });
-def(B.GRASS, 'Grass Block', { top: T.GRASS_TOP, side: T.GRASS_SIDE, bottom: T.DIRT });
-def(B.DIRT, 'Dirt', { all: T.DIRT });
-def(B.STONE, 'Stone', { all: T.STONE });
-def(B.SAND, 'Sand', { all: T.SAND });
-def(B.LOG, 'Oak Log', { top: T.LOG_TOP, side: T.LOG_SIDE, bottom: T.LOG_TOP });
-def(B.LEAVES, 'Oak Leaves', { all: T.LEAVES }, { opaque: false, selfFaces: true, occludes: true });
-def(B.PLANKS, 'Oak Planks', { all: T.PLANKS });
-def(B.COBBLE, 'Cobblestone', { all: T.COBBLE });
-def(B.GLASS, 'Glass', { all: T.GLASS }, { opaque: false });
-def(B.WATER, 'Water', { all: T.WATER }, { solid: false, opaque: false, liquid: true, breakable: false });
-def(B.BEDROCK, 'Bedrock', { all: T.BEDROCK }, { breakable: false });
-def(B.BRICK, 'Bricks', { all: T.BRICK });
-def(B.SNOW, 'Snowy Grass', { top: T.SNOW, side: T.SNOW_SIDE, bottom: T.DIRT });
-def(B.COAL_ORE, 'Coal Ore', { all: T.COAL_ORE });
-def(B.IRON_ORE, 'Iron Ore', { all: T.IRON_ORE });
+def(B.AIR, 'Air', { all: 0 }, { solid: false, opaque: false, placeable: false });
+def(B.GRASS, 'Grass Block', { top: T.GRASS_TOP, side: T.GRASS_SIDE, bottom: T.DIRT }, { hardness: 0.6 });
+def(B.DIRT, 'Dirt', { all: T.DIRT }, { hardness: 0.5 });
+def(B.STONE, 'Stone', { all: T.STONE }, { hardness: 1.5 });
+def(B.SAND, 'Sand', { all: T.SAND }, { hardness: 0.5 });
+def(B.LOG, 'Oak Log', { top: T.LOG_TOP, side: T.LOG_SIDE, bottom: T.LOG_TOP }, { hardness: 1.0 });
+def(B.LEAVES, 'Oak Leaves', { all: T.LEAVES }, { opaque: false, selfFaces: true, occludes: true, hardness: 0.2 });
+def(B.PLANKS, 'Oak Planks', { all: T.PLANKS }, { hardness: 1.0 });
+def(B.COBBLE, 'Cobblestone', { all: T.COBBLE }, { hardness: 1.5 });
+def(B.GLASS, 'Glass', { all: T.GLASS }, { opaque: false, hardness: 0.3 });
+def(B.WATER, 'Water', { all: T.WATER }, { solid: false, opaque: false, liquid: true, breakable: false, placeable: false });
+def(B.BEDROCK, 'Bedrock', { all: T.BEDROCK }, { breakable: false, placeable: false });
+def(B.BRICK, 'Bricks', { all: T.BRICK }, { hardness: 1.5 });
+def(B.SNOW, 'Snowy Grass', { top: T.SNOW, side: T.SNOW_SIDE, bottom: T.DIRT }, { hardness: 0.6 });
+def(B.COAL_ORE, 'Coal Ore', { all: T.COAL_ORE }, { hardness: 2 });
+def(B.IRON_ORE, 'Iron Ore', { all: T.IRON_ORE }, { hardness: 2.5 });
 
-export const HOTBAR = [B.GRASS, B.DIRT, B.STONE, B.COBBLE, B.PLANKS, B.LOG, B.BRICK, B.GLASS, B.SAND];
+// Ship hull: metal plating whose damage is permanent.
+const hull = (shape) => ({ shape, hardness: 4, permanentDamage: true });
+def(B.HULL, 'Hull Block', { all: T.HULL }, hull(SHAPE.FULL));
+def(B.HULL_SLAB, 'Hull Half Block', { all: T.HULL }, hull(SHAPE.SLAB));
+def(B.HULL_PLATE, 'Hull Plate', { all: T.HULL }, hull(SHAPE.PLATE));
+def(B.HULL_SLOPE, 'Hull Slope 45°', { all: T.HULL }, hull(SHAPE.SLOPE));
+def(B.HULL_SLOPE_LOW, 'Hull Slope 26.6° (low)', { all: T.HULL }, hull(SHAPE.SLOPE_LOW));
+def(B.HULL_SLOPE_HIGH, 'Hull Slope 26.6° (high)', { all: T.HULL }, hull(SHAPE.SLOPE_HIGH));
+
+export const HOTBAR = [B.HULL, B.HULL_SLAB, B.HULL_PLATE, B.HULL_SLOPE, B.HULL_SLOPE_LOW, B.HULL_SLOPE_HIGH, B.GLASS, B.PLANKS, B.STONE];

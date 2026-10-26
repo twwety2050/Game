@@ -4,7 +4,7 @@
 // where `com` is the local centre of mass, so the ship rotates about its centre of mass.
 // Blocks can be added and removed at any time, including while the ship is moving.
 import * as THREE from 'three';
-import { VoxelGrid, SOLID, CS } from './grid.js';
+import { VoxelGrid, SOLID, CS, idx } from './grid.js';
 import { B } from './blocks.js';
 
 const _v = new THREE.Vector3();
@@ -19,10 +19,10 @@ const CORNERS = [];
 for (const x of [INSET, 1 - INSET]) for (const y of [INSET, 1 - INSET]) for (const z of [INSET, 1 - INSET]) CORNERS.push([x, y, z]);
 
 export class Ship extends VoxelGrid {
-  constructor(scene, material, waterMaterial) {
+  constructor(scene, materials) {
     const group = new THREE.Group();
     scene.add(group);
-    super(group, material, waterMaterial);
+    super(group, materials);
     this.scene = scene;
     this.group = group;
     this.createChunks = true;
@@ -182,6 +182,14 @@ export class Ship extends VoxelGrid {
 
   // ---------- lifecycle ----------
 
+  // Record damage without remeshing (used while loading, before the first mesh build).
+  setDamageQuiet(x, y, z, value) {
+    const c = this.getChunkAt(x, y, z);
+    if (!c) return;
+    if (!c.damage) c.damage = new Map();
+    c.damage.set(idx(x - c.cx * CS, y - c.cy * CS, z - c.cz * CS), value);
+  }
+
   remeshAll() {
     for (const c of this.chunks.values()) this.buildMesh(c);
   }
@@ -192,16 +200,19 @@ export class Ship extends VoxelGrid {
   }
 
   serialize() {
-    const blocks = [];
+    const blocks = [], damage = [];
+    const pos = (c, i) => [c.cx * CS + (i % CS), c.cy * CS + Math.floor(i / (CS * CS)), c.cz * CS + (Math.floor(i / CS) % CS)];
     for (const c of this.chunks.values()) {
       if (!c.data) continue;
-      const ox = c.cx * CS, oy = c.cy * CS, oz = c.cz * CS;
       for (let i = 0; i < c.data.length; i++) {
-        if (c.data[i] !== B.AIR) blocks.push(ox + (i % CS), oy + Math.floor(i / (CS * CS)), oz + (Math.floor(i / CS) % CS), c.data[i]);
+        if (c.data[i] !== B.AIR) blocks.push(...pos(c, i), c.data[i], c.meta ? c.meta[i] : 0);
       }
+      if (c.damage) for (const [i, d] of c.damage) damage.push(...pos(c, i), d);
     }
     return {
+      format: 2, // blocks are [x, y, z, id, meta] (format 1 had no meta)
       blocks,
+      damage,
       position: this.position.toArray(),
       quaternion: this.quaternion.toArray(),
       velocity: this.velocity.toArray(),
@@ -209,10 +220,15 @@ export class Ship extends VoxelGrid {
     };
   }
 
-  static deserialize(data, scene, material, waterMaterial) {
-    const ship = new Ship(scene, material, waterMaterial);
+  static deserialize(data, scene, materials) {
+    const ship = new Ship(scene, materials);
     const b = data.blocks;
-    for (let i = 0; i < b.length; i += 4) ship.setBlock(b[i], b[i + 1], b[i + 2], b[i + 3], { remesh: false });
+    const stride = data.format === 2 ? 5 : 4;
+    for (let i = 0; i < b.length; i += stride) {
+      ship.setBlock(b[i], b[i + 1], b[i + 2], b[i + 3], { meta: stride === 5 ? b[i + 4] : 0, remesh: false });
+    }
+    const dmg = data.damage ?? [];
+    for (let i = 0; i < dmg.length; i += 4) ship.setDamageQuiet(dmg[i], dmg[i + 1], dmg[i + 2], dmg[i + 3]);
     ship.position.fromArray(data.position);
     ship.quaternion.fromArray(data.quaternion);
     ship.velocity.fromArray(data.velocity);

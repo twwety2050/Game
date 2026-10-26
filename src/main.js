@@ -1,7 +1,9 @@
 import * as THREE from 'three';
-import { createAtlas } from './textures.js';
-import { B, BLOCKS, HOTBAR } from './blocks.js';
+import { createAtlas, ATLAS } from './textures.js';
+import { B, BLOCKS, HOTBAR, T } from './blocks.js';
 import { World, CS } from './world.js';
+import { VoxelGrid, crackStage } from './grid.js';
+import { SHAPE, rotationFor } from './shapes.js';
 import { Ship } from './ship.js';
 import { Player } from './player.js';
 import { Hud } from './hud.js';
@@ -40,6 +42,12 @@ const solidMat = new THREE.MeshBasicMaterial({ map: texture, vertexColors: true,
 const waterMat = new THREE.MeshBasicMaterial({
   map: texture, vertexColors: true, transparent: true, opacity: 0.72, depthWrite: false, side: THREE.DoubleSide,
 });
+// Cracks are drawn on top of damaged faces; the polygon offset keeps them from z-fighting.
+const crackMat = new THREE.MeshBasicMaterial({
+  map: texture, transparent: true, alphaTest: 0.1, depthWrite: false,
+  polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4,
+});
+const materials = { solid: solidMat, water: waterMat, crack: crackMat };
 
 const fogFar = RENDER_DISTANCE * CS;
 scene.fog = new THREE.Fog(0x87ceeb, fogFar * 0.55, fogFar);
@@ -57,23 +65,81 @@ const highlight = new THREE.LineSegments(
 highlight.visible = false;
 scene.add(highlight);
 
+// Crack overlay for the block being mined (blocks whose damage isn't permanent).
+const breakOverlay = new THREE.Mesh(new THREE.BoxGeometry(1.006, 1.006, 1.006), crackMat);
+const breakUVs = breakOverlay.geometry.attributes.uv.array.slice();
+breakOverlay.visible = false;
+scene.add(breakOverlay);
+
+function setBreakStage(stage) {
+  const tile = T.CRACK + stage - 1, tu = tile % ATLAS, tv = Math.floor(tile / ATLAS);
+  const uv = breakOverlay.geometry.attributes.uv;
+  for (let i = 0; i < uv.count; i++) {
+    uv.array[i * 2] = (tu + breakUVs[i * 2]) / ATLAS;
+    uv.array[i * 2 + 1] = 1 - (tv + 1 - breakUVs[i * 2 + 1]) / ATLAS;
+  }
+  uv.needsUpdate = true;
+}
+
+// Render a small isometric picture of every block (using the real mesher, so shaped blocks
+// look right) for the hotbar and inventory.
+function renderBlockIcons() {
+  const size = 96;
+  const target = new THREE.WebGLRenderTarget(size, size);
+  target.texture.colorSpace = THREE.SRGBColorSpace;
+  const iconScene = new THREE.Scene();
+  const iconMaterials = { solid: solidMat.clone(), water: waterMat.clone(), crack: crackMat };
+  const cam = new THREE.OrthographicCamera(-0.92, 0.92, 0.92, -0.92, 0.1, 10);
+  cam.position.set(2.2, 1.9, 2.2);
+  cam.lookAt(0.5, 0.42, 0.5);
+  const pixels = new Uint8Array(size * size * 4);
+  const icons = new Map();
+  renderer.setClearColor(0x000000, 0);
+  for (const def of BLOCKS) {
+    if (!def || def.id === B.AIR) continue;
+    const grid = new VoxelGrid(iconScene, iconMaterials);
+    grid.createChunks = true;
+    grid.setBlock(0, 0, 0, def.id, { remesh: false });
+    const chunk = grid.getChunkAt(0, 0, 0);
+    grid.buildMesh(chunk);
+    renderer.setRenderTarget(target);
+    renderer.clear();
+    renderer.render(iconScene, cam);
+    renderer.readRenderTargetPixels(target, 0, 0, size, size, pixels);
+    grid.disposeMeshes(chunk);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    const img = ctx.createImageData(size, size);
+    for (let y = 0; y < size; y++) {
+      img.data.set(pixels.subarray((size - 1 - y) * size * 4, (size - y) * size * 4), y * size * 4); // flip rows
+    }
+    ctx.putImageData(img, 0, 0);
+    icons.set(def.id, canvas);
+  }
+  renderer.setRenderTarget(null);
+  target.dispose();
+  return icons;
+}
+
 // ---------- game objects ----------
 
-const world = new World(scene, solidMat, waterMat, seed, save?.edits, RENDER_DISTANCE);
-const ships = (save?.ships ?? []).map((data) => Ship.deserialize(data, scene, solidMat, waterMat));
+const world = new World(scene, materials, seed, save?.world ?? { edits: save?.edits }, RENDER_DISTANCE);
+const ships = (save?.ships ?? []).map((data) => Ship.deserialize(data, scene, materials));
 const player = new Player(camera, world, ships);
 if (save?.player) player.restore(save.player);
 else player.spawn(world.findSpawn());
 player.syncCamera();
 
-const hud = new Hud(atlas, save?.hotbar ?? HOTBAR);
+const hud = new Hud(renderBlockIcons(), save?.hotbar ?? HOTBAR);
 let time = save?.time ?? 0.3;
 let showDebug = false;
 
 function persist() {
   try {
     localStorage.setItem(SAVE_KEY, JSON.stringify({
-      seed, time, edits: world.serializeEdits(), player: player.serialize(), hotbar: hud.items,
+      seed, time, world: world.serialize(), player: player.serialize(), hotbar: hud.items,
       ships: ships.map((ship) => ship.serialize()),
     }));
   } catch (e) {
@@ -86,8 +152,26 @@ addEventListener('beforeunload', persist);
 // ---------- input ----------
 
 const menu = document.getElementById('menu');
+const inventory = document.getElementById('inventory');
 const canvas = renderer.domElement;
 let locked = false;
+let inventoryOpen = false;
+
+function openInventory() {
+  inventoryOpen = true;
+  document.exitPointerLock();
+}
+
+function closeInventory() {
+  inventoryOpen = false;
+  inventory.classList.add('hidden');
+  lock();
+}
+
+hud.buildInventory((id) => {
+  hud.setItem(id);
+  closeInventory();
+});
 
 const lock = () => canvas.requestPointerLock();
 document.getElementById('play').addEventListener('click', lock);
@@ -101,7 +185,8 @@ canvas.addEventListener('click', () => { if (!locked) lock(); });
 
 document.addEventListener('pointerlockchange', () => {
   locked = document.pointerLockElement === canvas;
-  menu.classList.toggle('hidden', locked);
+  inventory.classList.toggle('hidden', locked || !inventoryOpen);
+  menu.classList.toggle('hidden', locked || inventoryOpen);
   if (!locked) { held.clear(); persist(); }
 });
 
@@ -112,7 +197,7 @@ document.addEventListener('mousemove', (e) => {
 const held = new Map(); // mouse button -> seconds until next repeat
 document.addEventListener('mousedown', (e) => {
   if (!locked) return;
-  act(e.button);
+  if (e.button !== 0) act(e.button); // left button mines continuously, see updateMining
   held.set(e.button, 0.3);
 });
 document.addEventListener('mouseup', (e) => held.delete(e.button));
@@ -120,6 +205,17 @@ document.addEventListener('contextmenu', (e) => e.preventDefault());
 document.addEventListener('wheel', (e) => { if (locked) hud.scroll(Math.sign(e.deltaY)); }, { passive: true });
 
 addEventListener('keydown', (e) => {
+  if (e.code === 'KeyE' && !e.repeat) {
+    if (inventoryOpen) closeInventory();
+    else if (locked) openInventory();
+    return;
+  }
+  if (e.code === 'Escape' && inventoryOpen) {
+    inventoryOpen = false;
+    inventory.classList.add('hidden');
+    menu.classList.remove('hidden');
+    return;
+  }
   if (e.code.startsWith('Digit')) {
     const n = Number(e.code.slice(5));
     if (n >= 1 && n <= 9) hud.select(n - 1);
@@ -174,19 +270,71 @@ function raycastAll(origin, dir) {
 function act(button) {
   if (!target) return;
   const grid = target.grid;
-  if (button === 0) {
-    if (!BLOCKS[target.id].breakable) return;
-    grid.setBlock(target.x, target.y, target.z, B.AIR);
-    if (grid instanceof Ship && grid.blockCount === 0) removeShip(grid);
-  } else if (button === 2) {
+  if (button === 2) {
     const x = target.x + target.nx, y = target.y + target.ny, z = target.z + target.nz;
     const existing = grid.getBlock(x, y, z);
     if (existing !== B.AIR && !BLOCKS[existing].liquid) return;
-    if (BLOCKS[hud.current].solid && player.overlapsBlock(grid, x, y, z)) return;
-    grid.setBlock(x, y, z, hud.current);
+    const id = hud.current;
+    if (BLOCKS[id].solid && player.overlapsBlock(grid, x, y, z)) return;
+    grid.setBlock(x, y, z, id, { meta: placementRotation(id, grid) });
   } else if (button === 1) {
     hud.setItem(target.id);
   }
+}
+
+// Orientation for a newly placed shaped block: it rests against the face you clicked, and a
+// slope's low edge faces you, so it rises away from you like a ramp.
+function placementRotation(id, grid) {
+  if (BLOCKS[id].shape === SHAPE.FULL) return 0;
+  const down = [-target.nx, -target.ny, -target.nz];
+  const toward = grid.dirToLocal(tmpDir, tmpA).negate();
+  toward.addScaledVector(tmpB.fromArray(down), -toward.dot(tmpB));
+  if (toward.lengthSq() < 1e-6) {
+    // Looking straight along the face normal: use the camera's up to pick a direction.
+    grid.dirToLocal(tmpB.set(0, 1, 0).applyQuaternion(camera.quaternion), toward);
+    toward.addScaledVector(tmpB.fromArray(down), -toward.dot(tmpB)).negate();
+  }
+  const a = [Math.abs(toward.x), Math.abs(toward.y), Math.abs(toward.z)];
+  const axis = a[0] >= a[1] && a[0] >= a[2] ? 0 : a[1] >= a[2] ? 1 : 2;
+  const front = [0, 0, 0];
+  front[axis] = Math.sign(toward.getComponent(axis)) || 1;
+  return rotationFor(down, front);
+}
+
+// ---------- mining ----------
+
+// Holding the left button wears a block down over its hardness time. Ordinary blocks heal
+// if you stop; blocks with permanent damage (hull) keep their cracks, saved with the grid.
+let mining = null; // { grid, x, y, z, id, progress }
+
+function updateMining(dt) {
+  const def = target && BLOCKS[target.id];
+  if (!locked || !held.has(0) || !target || !def.breakable) { stopMining(); return; }
+  const { grid, x, y, z } = target;
+  if (!mining || mining.grid !== grid || mining.x !== x || mining.y !== y || mining.z !== z || mining.id !== target.id) {
+    stopMining();
+    mining = { grid, x, y, z, id: target.id, progress: def.permanentDamage ? grid.getDamage(x, y, z) : 0 };
+  }
+  mining.progress += dt / def.hardness;
+  if (mining.progress >= 1) {
+    grid.setBlock(x, y, z, B.AIR);
+    if (grid instanceof Ship && grid.blockCount === 0) removeShip(grid);
+    stopMining();
+    return;
+  }
+  if (def.permanentDamage) {
+    grid.setDamage(x, y, z, mining.progress);
+  } else {
+    breakOverlay.visible = true;
+    grid.localToWorld(tmpA.set(x + 0.5, y + 0.5, z + 0.5), breakOverlay.position);
+    breakOverlay.quaternion.copy(grid.quaternion);
+    setBreakStage(crackStage(mining.progress));
+  }
+}
+
+function stopMining() {
+  mining = null;
+  breakOverlay.visible = false;
 }
 
 // ---------- ships ----------
@@ -194,9 +342,11 @@ function act(button) {
 // Spawn a small starter deck in front of the player, level with (or just above) their feet
 // and aligned with their current gravity.
 function spawnShip() {
-  const ship = new Ship(scene, solidMat, waterMat);
-  for (let x = -2; x <= 2; x++) for (let z = -3; z <= 3; z++) ship.setBlock(x, 0, z, B.PLANKS, { remesh: false });
-  ship.setBlock(0, 0, -3, B.COBBLE, { remesh: false }); // marks the bow
+  const ship = new Ship(scene, materials);
+  for (let x = -2; x <= 2; x++) for (let z = -3; z <= 3; z++) ship.setBlock(x, 0, z, B.HULL, { remesh: false });
+  // A sloped bow so you can tell which way is forward.
+  const bow = rotationFor([0, -1, 0], [0, 0, -1]);
+  for (let x = -2; x <= 2; x++) ship.setBlock(x, 0, -4, B.HULL_SLOPE, { meta: bow, remesh: false });
 
   const forward = tmpA, right = tmpB;
   player.moveBasis(forward, right);
@@ -337,7 +487,9 @@ function frame(now) {
   }
   updateStatus();
 
+  updateMining(dt);
   for (const [button, t] of held) {
+    if (button === 0) continue;
     const next = t - dt;
     if (next <= 0) { act(button); held.set(button, 0.2); } else held.set(button, next);
   }
@@ -348,6 +500,7 @@ function frame(now) {
   frames++;
   fpsTimer += dt;
   if (fpsTimer >= 0.5) { fps = Math.round(frames / fpsTimer); frames = 0; fpsTimer = 0; }
+  crackMat.color.copy(solidMat.color);
   if (showDebug) {
     const p = wp;
     const ship = player.ref;
@@ -355,7 +508,7 @@ function frame(now) {
       `VoxelCraft  ${fps} fps`,
       `XYZ: ${p.x.toFixed(2)} / ${p.y.toFixed(2)} / ${p.z.toFixed(2)}`,
       `Chunk: ${Math.floor(p.x / CS)}, ${Math.floor(p.y / CS)}, ${Math.floor(p.z / CS)}   loaded: ${world.chunks.size}`,
-      `Facing: ${target ? `${BLOCKS[target.id].name} @ ${target.x} ${target.y} ${target.z}${target.grid === world ? '' : ' (ship)'}` : '-'}`,
+      `Facing: ${target ? `${BLOCKS[target.id].name} @ ${target.x} ${target.y} ${target.z}${target.grid === world ? '' : ' (ship)'}  damage ${Math.round(target.grid.getDamage(target.x, target.y, target.z) * 100)}%` : '-'}`,
       `Ships: ${ships.length}   riding: ${ship ? `ship #${ships.indexOf(ship)} (${ship.blockCount} blocks, ${ship.velocity.length().toFixed(1)} m/s)` : 'world'}`,
       `Mode: ${player.flying ? 'flying' : player.inWater ? 'swimming' : 'walking'}   gravity: ${player.gravityLabel()}   seed: ${seed}`,
       `Draw calls: ${renderer.info.render.calls}  tris: ${renderer.info.render.triangles}`,

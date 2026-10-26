@@ -14,17 +14,17 @@ const MARGIN = 2;                  // columns sampled beyond a chunk edge so tre
 const COL = CS + 2 * MARGIN;
 
 export class World extends VoxelGrid {
-  constructor(scene, material, waterMaterial, seed, savedEdits, renderDistance = 6) {
-    super(scene, material, waterMaterial);
+  constructor(scene, materials, seed, saved = {}, renderDistance = 6) {
+    super(scene, materials);
     this.seed = seed;
     this.noise = new Noise(seed);
     this.caveNoiseA = new Noise(seed + 1);
     this.caveNoiseB = new Noise(seed + 2);
     this.columns = new Map(); // cached heightmaps and trees per (cx, cz) column
-    this.edits = new Map(); // chunk key -> Map(local index -> block id)
-    if (savedEdits) {
-      for (const [key, list] of Object.entries(savedEdits)) this.edits.set(key, new Map(list));
-    }
+    this.edits = new Map();  // chunk key -> Map(local index -> block id | meta << 8)
+    this.damage = new Map(); // chunk key -> Map(local index -> damage), shared with loaded chunks
+    for (const [key, list] of Object.entries(saved.edits ?? {})) this.edits.set(key, new Map(list));
+    for (const [key, list] of Object.entries(saved.damage ?? {})) this.damage.set(key, new Map(list));
     this.setRenderDistance(renderDistance);
   }
 
@@ -95,7 +95,9 @@ export class World extends VoxelGrid {
 
   generate(c) {
     const ox = c.cx * CS, oy = c.cy * CS, oz = c.cz * CS;
-    const edits = this.edits.get(this.key(c.cx, c.cy, c.cz));
+    const key = this.key(c.cx, c.cy, c.cz);
+    const edits = this.edits.get(key);
+    c.damage = this.damage.get(key) ?? null;
     const hasTerrain = oy < TERRAIN_HEIGHT && oy + CS > 0;
     if (!hasTerrain && !edits) return;
 
@@ -160,7 +162,14 @@ export class World extends VoxelGrid {
       }
     }
 
-    if (edits) for (const [i, b] of edits) d[i] = b;
+    if (edits) {
+      for (const [i, v] of edits) {
+        d[i] = v & 255;
+        const meta = v >> 8;
+        if (meta && !c.meta) c.meta = new Uint8Array(CS3);
+        if (c.meta) c.meta[i] = meta;
+      }
+    }
     if (d.some((b) => b !== B.AIR)) c.data = d;
   }
 
@@ -177,16 +186,21 @@ export class World extends VoxelGrid {
   }
 
   // Remember every edit so chunks regenerate with it after being unloaded.
-  onBlockChanged(_x, _y, _z, _old, id, key, i) {
+  onBlockChanged(_x, _y, _z, _old, id, key, i, meta) {
     let e = this.edits.get(key);
     if (!e) { e = new Map(); this.edits.set(key, e); }
-    e.set(i, id);
+    e.set(i, id | (meta << 8));
   }
 
-  serializeEdits() {
-    const out = {};
-    for (const [key, map] of this.edits) out[key] = [...map];
-    return out;
+  onDamageMapCreated(key, map) {
+    this.damage.set(key, map);
+  }
+
+  serialize() {
+    const edits = {}, damage = {};
+    for (const [key, map] of this.edits) edits[key] = [...map];
+    for (const [key, map] of this.damage) if (map.size) damage[key] = [...map];
+    return { edits, damage };
   }
 
   // ---------- streaming ----------

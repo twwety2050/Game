@@ -2,8 +2,12 @@
 //
 // The static world and every ship are grids. A grid has a rigid transform (identity for the
 // world) mapping its local block coordinates to world space; ships override it.
+//
+// Per block a chunk stores an id, an orientation (`meta`, one of 24 rotations, used by shaped
+// blocks), and optionally accumulated damage in [0, 1), which is drawn as cracks.
 import * as THREE from 'three';
-import { B, BLOCKS } from './blocks.js';
+import { B, BLOCKS, T, CRACK_STAGES } from './blocks.js';
+import { SHAPE, VARIANTS } from './shapes.js';
 import { ATLAS } from './textures.js';
 
 export const CS = 32; // chunk edge length on every axis
@@ -29,13 +33,34 @@ const PY = P * P;
 const PAD = new Uint8Array(P * P * P);
 const pidx = (x, y, z) => (y + 1) * PY + (z + 1) * P + (x + 1);
 
-// Per-block flag tables, faster than reading BLOCKS[id].flag in the meshing loop.
-const flagTable = (key) => Uint8Array.from({ length: 256 }, (_, id) => (BLOCKS[id]?.[key] ? 1 : 0));
-const OPAQUE = flagTable('opaque');
-const OCCLUDES = flagTable('occludes');
-const LIQUID = flagTable('liquid');
-export const SOLID = flagTable('solid');
-const SELF_FACES = flagTable('selfFaces');
+const PAD_META = new Uint8Array(P * P * P);
+
+// Per-block lookup tables, faster than reading BLOCKS[id].flag in the meshing loop.
+const table = (fn) => Uint8Array.from({ length: 256 }, (_, id) => (BLOCKS[id] ? fn(BLOCKS[id]) : 0));
+const OPAQUE = table((d) => d.opaque);
+const OCCLUDES = table((d) => d.occludes);
+const LIQUID = table((d) => d.liquid);
+export const SOLID = table((d) => d.solid);
+const SELF_FACES = table((d) => d.selfFaces);
+const SHAPE_OF = table((d) => d.shape);
+// 2 = opaque full cube (hides every neighbouring face), 1 = opaque shape (hides only the
+// neighbouring faces it fully covers), 0 = see-through.
+const COVER = table((d) => (!d.opaque ? 0 : d.shape === SHAPE.FULL ? 2 : 1));
+const FULL_MASK = new Uint8Array(VARIANTS.length * 24);
+VARIANTS.forEach((rots, shape) => rots.forEach((v, r) => { FULL_MASK[shape * 24 + r] = v.full; }));
+
+// Does block `id` with orientation `meta` completely cover its face in direction `dir`?
+const covers = (id, meta, dir) => {
+  const c = COVER[id];
+  return c === 2 || (c === 1 && ((FULL_MASK[SHAPE_OF[id] * 24 + meta] >> dir) & 1) === 1);
+};
+
+const FULL_BOXES = [[0, 0, 0, 1, 1, 1]];
+// Collision boxes (block-local, 0..1) of a block with the given orientation.
+export const blockBoxes = (id, meta) => (SHAPE_OF[id] === SHAPE.FULL ? FULL_BOXES : VARIANTS[SHAPE_OF[id]][meta].boxes);
+
+export const crackStage = (damage) => (damage > 0 ? Math.min(CRACK_STAGES, Math.floor(damage * CRACK_STAGES) + 1) : 0);
+const crackTile = (damage) => T.CRACK + crackStage(damage) - 1;
 
 // Precompute per-face neighbour offsets, per-corner AO sample offsets, UVs, and lighting.
 for (const f of FACES) {
@@ -66,14 +91,31 @@ export class Chunk {
     this.cx = cx;
     this.cy = cy;
     this.cz = cz;
-    this.data = null; // null means the chunk is entirely air
+    this.data = null;   // block ids; null means the chunk is entirely air
+    this.meta = null;   // orientations; null means all 0
+    this.damage = null; // Map(local index -> damage in [0, 1)), or null
     this.dirty = true;
     this.mesh = null;
     this.waterMesh = null;
+    this.crackMesh = null;
   }
 }
 
 class GeometryBuilder {
+  // Append one textured polygon: `verts` block-local, offset by (x, y, z); `uvs` within a tile.
+  addPolygon(x, y, z, verts, uvs, tris, tile, light) {
+    const base = this.count;
+    const tu = tile % ATLAS, tv = Math.floor(tile / ATLAS);
+    for (let k = 0; k < verts.length; k++) {
+      const v = verts[k];
+      this.pos.push(x + v[0], y + v[1], z + v[2]);
+      const u = UV_EPS + uvs[k][0] * (1 - 2 * UV_EPS), w = UV_EPS + uvs[k][1] * (1 - 2 * UV_EPS);
+      this.uv.push((tu + u) / ATLAS, 1 - (tv + 1 - w) / ATLAS);
+      this.col.push(light, light, light);
+    }
+    for (const t of tris) this.ind.push(base + t[0], base + t[1], base + t[2]);
+  }
+
   constructor() { this.pos = []; this.uv = []; this.col = []; this.ind = []; }
   get count() { return this.pos.length / 3; }
   build() {
@@ -88,11 +130,46 @@ class GeometryBuilder {
   }
 }
 
+// Texture coordinates for a shaped polygon: project onto the plane its normal faces most.
+const projectUVs = (verts, n) => {
+  const ax = Math.abs(n[0]), ay = Math.abs(n[1]), az = Math.abs(n[2]);
+  if (ay >= ax && ay >= az) return verts.map((v) => [v[0], v[2]]);
+  if (ax >= az) return verts.map((v) => [v[2], v[1]]);
+  return verts.map((v) => [v[0], v[1]]);
+};
+for (const rots of VARIANTS) {
+  for (const v of rots) for (const p of v.polys) {
+    p.uvs = projectUVs(p.verts, p.normal);
+    p.light = Math.pow(p.shade, 2.2);
+  }
+}
+
+// Ray vs axis-aligned box entry. Returns the entry distance and the axis/sign of the face
+// entered, or null if the ray misses (or starts inside).
+function rayBox(o, d, x0, y0, z0, x1, y1, z1) {
+  let tmin = -Infinity, tmax = Infinity, axis = 0, sign = 0;
+  const lo = [x0, y0, z0], hi = [x1, y1, z1], oo = [o.x, o.y, o.z], dd = [d.x, d.y, d.z];
+  for (let a = 0; a < 3; a++) {
+    if (Math.abs(dd[a]) < 1e-12) {
+      if (oo[a] < lo[a] || oo[a] > hi[a]) return null;
+      continue;
+    }
+    let t0 = (lo[a] - oo[a]) / dd[a], t1 = (hi[a] - oo[a]) / dd[a];
+    const s = dd[a] > 0 ? -1 : 1;
+    if (t0 > t1) { const tmp = t0; t0 = t1; t1 = tmp; }
+    if (t0 > tmin) { tmin = t0; axis = a; sign = s; }
+    if (t1 < tmax) tmax = t1;
+    if (tmin > tmax) return null;
+  }
+  if (tmax < 0) return null;
+  return { t: Math.max(tmin, 0), axis, sign };
+}
+
 export class VoxelGrid {
-  constructor(container, material, waterMaterial) {
+  // materials: { solid, water, crack }
+  constructor(container, materials) {
     this.container = container; // THREE object the chunk meshes are added to
-    this.material = material;
-    this.waterMaterial = waterMaterial;
+    this.materials = materials;
     this.chunks = new Map();
     this.createChunks = false;  // whether setBlock may create missing chunks
     this.quaternion = new THREE.Quaternion();
@@ -121,12 +198,54 @@ export class VoxelGrid {
     return c.data[idx(x - cx * CS, y - cy * CS, z - cz * CS)];
   }
 
-  isSolid(x, y, z) {
-    return SOLID[this.getBlock(Math.floor(x), Math.floor(y), Math.floor(z))] === 1;
+  getMeta(x, y, z) {
+    const cx = Math.floor(x / CS), cy = Math.floor(y / CS), cz = Math.floor(z / CS);
+    const c = this.chunks.get(this.key(cx, cy, cz));
+    if (!c || !c.meta) return 0;
+    return c.meta[idx(x - cx * CS, y - cy * CS, z - cz * CS)];
   }
 
+  // Is the point (in local, fractional block coordinates) inside a solid block's shape?
+  isSolid(x, y, z) {
+    const bx = Math.floor(x), by = Math.floor(y), bz = Math.floor(z);
+    const id = this.getBlock(bx, by, bz);
+    if (!SOLID[id]) return false;
+    if (SHAPE_OF[id] === SHAPE.FULL) return true;
+    const fx = x - bx, fy = y - by, fz = z - bz;
+    for (const b of blockBoxes(id, this.getMeta(bx, by, bz))) {
+      if (fx >= b[0] && fx <= b[3] && fy >= b[1] && fy <= b[4] && fz >= b[2] && fz <= b[5]) return true;
+    }
+    return false;
+  }
+
+  getDamage(x, y, z) {
+    const cx = Math.floor(x / CS), cy = Math.floor(y / CS), cz = Math.floor(z / CS);
+    const c = this.chunks.get(this.key(cx, cy, cz));
+    return c?.damage?.get(idx(x - cx * CS, y - cy * CS, z - cz * CS)) ?? 0;
+  }
+
+  // Record damage on a block; the chunk is remeshed when the visible crack stage changes.
+  setDamage(x, y, z, value) {
+    const cx = Math.floor(x / CS), cy = Math.floor(y / CS), cz = Math.floor(z / CS);
+    const key = this.key(cx, cy, cz);
+    const c = this.chunks.get(key);
+    if (!c || !c.data) return;
+    const i = idx(x - cx * CS, y - cy * CS, z - cz * CS);
+    const old = c.damage?.get(i) ?? 0;
+    if (value > 0) {
+      if (!c.damage) { c.damage = new Map(); this.onDamageMapCreated(key, c.damage); }
+      c.damage.set(i, value);
+    } else if (c.damage) {
+      c.damage.delete(i);
+    }
+    if (crackStage(old) !== crackStage(value)) this.buildMesh(c);
+  }
+
+  onDamageMapCreated() {}
+
   // Sets a block and rebuilds the affected meshes. `remesh: false` defers meshing (bulk loads).
-  setBlock(x, y, z, id, { remesh = true } = {}) {
+  // Placing or removing a block clears any damage it had.
+  setBlock(x, y, z, id, { meta = 0, remesh = true } = {}) {
     const cx = Math.floor(x / CS), cy = Math.floor(y / CS), cz = Math.floor(z / CS);
     const key = this.key(cx, cy, cz);
     let c = this.chunks.get(key);
@@ -139,9 +258,13 @@ export class VoxelGrid {
     const i = idx(lx, ly, lz);
     if (!c.data) c.data = new Uint8Array(CS3);
     const old = c.data[i];
-    if (old === id) return true;
+    const oldMeta = c.meta ? c.meta[i] : 0;
+    if (old === id && oldMeta === meta) return true;
     c.data[i] = id;
-    this.onBlockChanged(x, y, z, old, id, key, i);
+    if (meta && !c.meta) c.meta = new Uint8Array(CS3);
+    if (c.meta) c.meta[i] = meta;
+    c.damage?.delete(i);
+    this.onBlockChanged(x, y, z, old, id, key, i, meta);
 
     if (!remesh) { c.dirty = true; return true; }
     // Rebuild this chunk and any neighbour whose faces or AO touch the edited block.
@@ -156,7 +279,7 @@ export class VoxelGrid {
   onBlockChanged() {}
 
   // Voxel DDA raycast in local coordinates. Returns the first non-liquid block hit, the face
-  // normal, and the distance along the ray.
+  // normal, and the distance along the ray. Shaped blocks are hit only where their shape is.
   raycast(origin, dir, maxDist) {
     let x = Math.floor(origin.x), y = Math.floor(origin.y), z = Math.floor(origin.z);
     const sx = Math.sign(dir.x), sy = Math.sign(dir.y), sz = Math.sign(dir.z);
@@ -169,7 +292,20 @@ export class VoxelGrid {
     let nx = 0, ny = 0, nz = 0, t = 0;
     while (t <= maxDist) {
       const b = this.getBlock(x, y, z);
-      if (b !== B.AIR && !BLOCKS[b].liquid) return { x, y, z, nx, ny, nz, id: b, t };
+      if (b !== B.AIR && !LIQUID[b]) {
+        if (SHAPE_OF[b] === SHAPE.FULL) return { x, y, z, nx, ny, nz, id: b, t };
+        const meta = this.getMeta(x, y, z);
+        let best = null;
+        for (const bx of blockBoxes(b, meta)) {
+          const hit = rayBox(origin, dir, x + bx[0], y + bx[1], z + bx[2], x + bx[3], y + bx[4], z + bx[5]);
+          if (hit && hit.t <= maxDist && (!best || hit.t < best.t)) best = hit;
+        }
+        if (best) {
+          const n = [0, 0, 0];
+          n[best.axis] = best.sign;
+          return { x, y, z, nx: n[0], ny: n[1], nz: n[2], id: b, t: best.t };
+        }
+      }
       if (tmx < tmy && tmx < tmz) { x += sx; t = tmx; tmx += tdx; nx = -sx; ny = 0; nz = 0; }
       else if (tmy < tmz) { y += sy; t = tmy; tmy += tdy; nx = 0; ny = -sy; nz = 0; }
       else { z += sz; t = tmz; tmz += tdz; nx = 0; ny = 0; nz = -sz; }
@@ -178,10 +314,10 @@ export class VoxelGrid {
   }
 
   disposeMeshes(c) {
-    for (const m of [c.mesh, c.waterMesh]) {
+    for (const m of [c.mesh, c.waterMesh, c.crackMesh]) {
       if (m) { this.container.remove(m); m.geometry.dispose(); }
     }
-    c.mesh = c.waterMesh = null;
+    c.mesh = c.waterMesh = c.crackMesh = null;
   }
 
   // ---------- meshing ----------
@@ -194,11 +330,14 @@ export class VoxelGrid {
 
     // Copy the chunk plus a one-block border from its neighbours into a padded buffer so
     // every neighbour lookup below is a plain array read.
-    const pad = PAD;
+    const pad = PAD, padMeta = PAD_META;
+    const meta = c.meta;
     for (let y = 0; y < CS; y++) {
       for (let z = 0; z < CS; z++) {
-        const i = idx(0, y, z);
-        pad.set(data.subarray(i, i + CS), pidx(0, y, z));
+        const i = idx(0, y, z), p = pidx(0, y, z);
+        pad.set(data.subarray(i, i + CS), p);
+        if (meta) padMeta.set(meta.subarray(i, i + CS), p);
+        else padMeta.fill(0, p, p + CS);
       }
     }
     for (let y = -1; y <= CS; y++) {
@@ -206,14 +345,23 @@ export class VoxelGrid {
       for (let z = -1; z <= CS; z++) {
         const zEdge = z === -1 || z === CS;
         for (let x = -1; x <= CS; x++) {
-          if (yEdge || zEdge || x === -1 || x === CS) pad[pidx(x, y, z)] = this.getBlock(ox + x, oy + y, oz + z);
+          if (yEdge || zEdge || x === -1 || x === CS) {
+            const p = pidx(x, y, z);
+            pad[p] = this.getBlock(ox + x, oy + y, oz + z);
+            padMeta[p] = pad[p] ? this.getMeta(ox + x, oy + y, oz + z) : 0;
+          }
         }
       }
     }
 
     const solid = new GeometryBuilder();
     const water = new GeometryBuilder();
+    const cracks = new GeometryBuilder();
+    const damage = c.damage && c.damage.size ? c.damage : null;
     const aos = [0, 0, 0, 0];
+    const quadUVs = [[0, 0], [0, 0], [0, 0], [0, 0]];
+    const quadVerts = [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]];
+    const QUAD_TRIS = [[0, 1, 2], [2, 1, 3]];
 
     // Vertices are chunk-local (the mesh is positioned at the chunk origin) so that
     // float precision holds up far from the world origin.
@@ -226,6 +374,20 @@ export class VoxelGrid {
           const liquid = LIQUID[b], opaque = OPAQUE[b];
           const def = BLOCKS[b];
           const lowerTop = liquid && pad[p + PY] !== B.WATER;
+          const dmg = damage ? damage.get(i) ?? 0 : 0;
+
+          if (SHAPE_OF[b] !== SHAPE.FULL) {
+            // Shaped block: emit its polygons, hiding those flush against a covering neighbour.
+            for (const poly of VARIANTS[SHAPE_OF[b]][padMeta[p]].polys) {
+              if (poly.cull >= 0) {
+                const q = p + FACES[poly.cull].offset;
+                if (covers(pad[q], padMeta[q], poly.cull ^ 1)) continue;
+              }
+              solid.addPolygon(x, y, z, poly.verts, poly.uvs, poly.tris, def.side, poly.light);
+              if (dmg) cracks.addPolygon(x, y, z, poly.verts, poly.uvs, poly.tris, crackTile(dmg), 1);
+            }
+            continue;
+          }
 
           for (let fi = 0; fi < 6; fi++) {
             const f = FACES[fi];
@@ -233,8 +395,8 @@ export class VoxelGrid {
             const nb = pad[q];
             let visible;
             if (liquid) visible = !OPAQUE[nb] && !LIQUID[nb] && !(SOLID[nb] && f.dir[1] === 0);
-            else if (opaque) visible = !OPAQUE[nb];
-            else visible = !OPAQUE[nb] && (nb !== b || SELF_FACES[b]);
+            else if (opaque) visible = !covers(nb, padMeta[q], fi ^ 1);
+            else visible = !covers(nb, padMeta[q], fi ^ 1) && (nb !== b || SELF_FACES[b]);
             if (!visible) continue;
 
             const dy = f.dir[1];
@@ -262,6 +424,15 @@ export class VoxelGrid {
             } else {
               g.ind.push(base, base + 1, base + 2, base + 2, base + 1, base + 3);
             }
+
+            if (dmg) {
+              for (let k = 0; k < 4; k++) {
+                const corner = f.corners[k];
+                quadVerts[k][0] = corner.x; quadVerts[k][1] = corner.y; quadVerts[k][2] = corner.z;
+                quadUVs[k][0] = corner.u; quadUVs[k][1] = corner.v;
+              }
+              cracks.addPolygon(x, y, z, quadVerts, quadUVs, QUAD_TRIS, crackTile(dmg), 1);
+            }
           }
         }
       }
@@ -270,16 +441,23 @@ export class VoxelGrid {
     this.disposeMeshes(c);
     const sg = solid.build();
     if (sg) {
-      c.mesh = new THREE.Mesh(sg, this.material);
+      c.mesh = new THREE.Mesh(sg, this.materials.solid);
       c.mesh.position.set(ox, oy, oz);
       this.container.add(c.mesh);
     }
     const wg = water.build();
     if (wg) {
-      c.waterMesh = new THREE.Mesh(wg, this.waterMaterial);
+      c.waterMesh = new THREE.Mesh(wg, this.materials.water);
       c.waterMesh.position.set(ox, oy, oz);
       c.waterMesh.renderOrder = 1;
       this.container.add(c.waterMesh);
+    }
+    const cg = cracks.build();
+    if (cg) {
+      c.crackMesh = new THREE.Mesh(cg, this.materials.crack);
+      c.crackMesh.position.set(ox, oy, oz);
+      c.crackMesh.renderOrder = 2;
+      this.container.add(c.crackMesh);
     }
   }
 }

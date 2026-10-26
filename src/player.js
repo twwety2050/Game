@@ -16,7 +16,7 @@
 // spheres that gets pushed out of any solid block it overlaps.
 import * as THREE from 'three';
 import { BLOCKS } from './blocks.js';
-import { SOLID } from './grid.js';
+import { SOLID, blockBoxes } from './grid.js';
 import { TERRAIN_HEIGHT } from './world.js';
 
 const HALF = 0.3;      // half the player's width (and the capsule radius)
@@ -32,6 +32,7 @@ const TURN_TIME = 0.45;       // seconds to reorient after gravity changes
 const FALL_RESCUE_TIME = 10;  // seconds of nonstop falling before being dropped back onto terrain
 const SPHERES = [HALF, HEIGHT / 2, HEIGHT - HALF]; // capsule sphere heights above the feet
 const SHIP_EXIT_MARGIN = 1.5; // how far outside a ship's bounds you can drift before leaving it
+const STEP_HEIGHT = 0.55;     // ledges up to this high (slabs, slopes) are walked up automatically
 
 const AXES = ['x', 'y', 'z'];
 const AXIS_NAMES = ['X', 'Y', 'Z'];
@@ -70,6 +71,7 @@ export class Player {
     this.inWater = false;
     this.headInWater = false;
     this.fallTime = 0;
+    this.stepOffset = 0; // eye lag after stepping up, smoothed away over a few frames
     this.keys = new Set();
 
     // Gravity frame, as exact unit axis vectors in the reference grid's coordinates.
@@ -282,18 +284,31 @@ export class Player {
   }
 
   collides() {
-    const p = this.pos, grid = this.grid;
-    const minX = Math.floor(p.x + this.lo[0]), maxX = Math.floor(p.x + this.hi[0]);
-    const minY = Math.floor(p.y + this.lo[1]), maxY = Math.floor(p.y + this.hi[1]);
-    const minZ = Math.floor(p.z + this.lo[2]), maxZ = Math.floor(p.z + this.hi[2]);
+    let hit = false;
+    this.forEachOverlappingBox(() => { hit = true; });
+    return hit;
+  }
+
+  // Call fn(box, x, y, z) for every collision box of the reference grid that overlaps the
+  // player's body. Boxes are block-local; (x, y, z) is the block they belong to.
+  forEachOverlappingBox(fn) {
+    const p = this.pos, grid = this.grid, lo = this.lo, hi = this.hi;
+    const minX = Math.floor(p.x + lo[0]), maxX = Math.floor(p.x + hi[0]);
+    const minY = Math.floor(p.y + lo[1]), maxY = Math.floor(p.y + hi[1]);
+    const minZ = Math.floor(p.z + lo[2]), maxZ = Math.floor(p.z + hi[2]);
     for (let y = minY; y <= maxY; y++) {
       for (let z = minZ; z <= maxZ; z++) {
         for (let x = minX; x <= maxX; x++) {
-          if (BLOCKS[grid.getBlock(x, y, z)].solid && this.intersectsBlock(x, y, z)) return true;
+          const id = grid.getBlock(x, y, z);
+          if (!SOLID[id]) continue;
+          for (const b of blockBoxes(id, grid.getMeta(x, y, z))) {
+            if (x + b[3] > p.x + lo[0] && x + b[0] < p.x + hi[0] &&
+              y + b[4] > p.y + lo[1] && y + b[1] < p.y + hi[1] &&
+              z + b[5] > p.z + lo[2] && z + b[2] < p.z + hi[2]) fn(b, x, y, z);
+          }
         }
       }
     }
-    return false;
   }
 
   // True if the player's box overlaps the block at (bx, by, bz) of the reference grid.
@@ -333,23 +348,27 @@ export class Player {
       const y0 = Math.floor(p.y - r), y1 = Math.floor(p.y + r);
       const z0 = Math.floor(p.z - r), z1 = Math.floor(p.z + r);
       for (let y = y0; y <= y1; y++) for (let z = z0; z <= z1; z++) for (let x = x0; x <= x1; x++) {
-        if (!SOLID[grid.getBlock(x, y, z)]) continue;
-        const cx = THREE.MathUtils.clamp(p.x, x, x + 1);
-        const cy = THREE.MathUtils.clamp(p.y, y, y + 1);
-        const cz = THREE.MathUtils.clamp(p.z, z, z + 1);
-        _d.set(p.x - cx, p.y - cy, p.z - cz);
-        const dist = _d.length();
-        if (dist >= r) continue;
-        if (dist > 1e-6) {
-          p.addScaledVector(_d, (r - dist) / dist);
-        } else {
-          // Centre is inside the block: leave through the nearest face.
-          const faces = [[p.x - x, -1, 0], [x + 1 - p.x, 1, 0], [p.y - y, -1, 1], [y + 1 - p.y, 1, 1], [p.z - z, -1, 2], [z + 1 - p.z, 1, 2]];
-          faces.sort((a, b) => a[0] - b[0]);
-          const [depth, sign, axis] = faces[0];
-          p.setComponent(axis, p.getComponent(axis) + sign * (depth + r));
+        const id = grid.getBlock(x, y, z);
+        if (!SOLID[id]) continue;
+        for (const b of blockBoxes(id, grid.getMeta(x, y, z))) {
+          const bx0 = x + b[0], by0 = y + b[1], bz0 = z + b[2], bx1 = x + b[3], by1 = y + b[4], bz1 = z + b[5];
+          const cx = THREE.MathUtils.clamp(p.x, bx0, bx1);
+          const cy = THREE.MathUtils.clamp(p.y, by0, by1);
+          const cz = THREE.MathUtils.clamp(p.z, bz0, bz1);
+          _d.set(p.x - cx, p.y - cy, p.z - cz);
+          const dist = _d.length();
+          if (dist >= r) continue;
+          if (dist > 1e-6) {
+            p.addScaledVector(_d, (r - dist) / dist);
+          } else {
+            // Centre is inside the box: leave through the nearest face.
+            const faces = [[p.x - bx0, -1, 0], [bx1 - p.x, 1, 0], [p.y - by0, -1, 1], [by1 - p.y, 1, 1], [p.z - bz0, -1, 2], [bz1 - p.z, 1, 2]];
+            faces.sort((a, c) => a[0] - c[0]);
+            const [depth, sign, axis] = faces[0];
+            p.setComponent(axis, p.getComponent(axis) + sign * (depth + r));
+          }
+          moved = true;
         }
-        moved = true;
       }
       if (!moved) break;
     }
@@ -477,9 +496,10 @@ export class Player {
     const sdt = dt / steps;
     const a = this.upAxis;
     const order = [a, (a + 1) % 3, (a + 2) % 3];
+    const canStep = this.onGround && !this.flying;
     this.onGround = false;
     for (let i = 0; i < steps; i++) {
-      for (const axis of order) this.moveAxis(axis, this.vel.getComponent(axis) * sdt);
+      for (const axis of order) this.moveAxis(axis, this.vel.getComponent(axis) * sdt, canStep);
     }
     const onOwnGround = this.onGround;
     const groundOther = this.resolveOtherGrids();
@@ -501,30 +521,44 @@ export class Player {
     this.syncCamera(dt);
   }
 
-  moveAxis(axis, amount) {
+  // Move along one grid axis, stopping at the first box in the way. With `canStep`, a low
+  // ledge (a slab, a slope) is climbed instead of blocking.
+  moveAxis(axis, amount, canStep = false) {
     if (amount === 0) return;
     const name = AXES[axis];
-    const p = this.pos, grid = this.grid;
+    const p = this.pos;
     p[name] += amount;
-    const minX = Math.floor(p.x + this.lo[0]), maxX = Math.floor(p.x + this.hi[0]);
-    const minY = Math.floor(p.y + this.lo[1]), maxY = Math.floor(p.y + this.hi[1]);
-    const minZ = Math.floor(p.z + this.lo[2]), maxZ = Math.floor(p.z + this.hi[2]);
     let hit = null;
-    for (let y = minY; y <= maxY; y++) {
-      for (let z = minZ; z <= maxZ; z++) {
-        for (let x = minX; x <= maxX; x++) {
-          if (!BLOCKS[grid.getBlock(x, y, z)].solid) continue;
-          if (!this.intersectsBlock(x, y, z)) continue;
-          const c = axis === 0 ? x : axis === 1 ? y : z;
-          if (hit === null || (amount > 0 ? c < hit : c > hit)) hit = c;
-        }
-      }
-    }
+    this.forEachOverlappingBox((b, x, y, z) => {
+      const base = axis === 0 ? x : axis === 1 ? y : z;
+      const edge = amount > 0 ? base + b[axis] : base + b[axis + 3];
+      if (hit === null || (amount > 0 ? edge < hit : edge > hit)) hit = edge;
+    });
     if (hit === null) return;
-    p[name] = amount > 0 ? hit - this.hi[axis] - EPS : hit + 1 - this.lo[axis] + EPS;
+    if (canStep && axis !== this.upAxis && this.tryStepUp()) return;
+    p[name] = amount > 0 ? hit - this.hi[axis] - EPS : hit - this.lo[axis] + EPS;
     // Landed if we were moving with gravity along the up axis.
     if (axis === this.upAxis && amount * this.upSign < 0) this.onGround = true;
     this.vel.setComponent(axis, 0);
+  }
+
+  // We've just moved sideways into something. If lifting by up to STEP_HEIGHT clears it,
+  // stay lifted and settle back down onto the ledge.
+  tryStepUp() {
+    const start = this.pos.clone();
+    this.pos.addScaledVector(this.up, STEP_HEIGHT);
+    if (this.collides()) { this.pos.copy(start); return false; }
+    const a = this.upAxis;
+    this.moveAxis(a, -STEP_HEIGHT * this.upSign);
+    const rise = (this.pos.getComponent(a) - start.getComponent(a)) * this.upSign;
+    if (rise <= EPS * 2) {
+      // Nothing to stand on up there (we were blocked by something else): undo.
+      this.pos.copy(start);
+      return false;
+    }
+    this.stepOffset += rise;
+    this.onGround = true;
+    return true;
   }
 
   // ---------- camera ----------
@@ -553,8 +587,9 @@ export class Player {
         this.turn = null;
       }
     }
+    this.stepOffset *= Math.exp(-dt * 18);
     const eye = _a.copy(this.pos)
-      .addScaledVector(this.up, HEIGHT / 2)
+      .addScaledVector(this.up, HEIGHT / 2 - this.stepOffset)
       .addScaledVector(eyeUp, EYE - HEIGHT / 2);
     this.grid.localToWorld(eye, this.camera.position);
     this.camera.quaternion.copy(this.grid.quaternion).multiply(this.viewQuaternion(_q1));

@@ -1,5 +1,5 @@
 // Procedurally painted 16x16 pixel-art textures packed into one atlas canvas.
-import { T } from './blocks.js';
+import { T, CRACK_STAGES } from './blocks.js';
 import { mulberry32 } from './noise.js';
 
 export const TILE = 16;
@@ -117,6 +117,47 @@ export function createAtlas() {
     const mortar = y % 4 === 3 || x % 8 === (row % 2 ? 0 : 4);
     put(T.BRICK, x, y, mortar ? vary([180, 170, 160], 0.05) : vary([150, 70, 55], 0.1));
   });
+
+  // Hull: brushed metal panel with bevelled seams, rivets, and a soft sheen.
+  each((x, y) => {
+    const streak = Math.sin(y * 2.3 + Math.sin(x * 0.7) * 0.6) * 4;
+    const sheen = 14 * Math.exp(-(((x - y) / 6) ** 2));
+    let c = [152 + streak + sheen, 160 + streak + sheen, 170 + streak + sheen];
+    if (x === 0 || y === 0) c = [196, 202, 210];             // lit bevel
+    else if (x === TILE - 1 || y === TILE - 1) c = [86, 92, 102]; // shadowed seam
+    else if (y === 8) c = [118, 124, 134];                   // panel split
+    put(T.HULL, x, y, vary(c, 0.025));
+  });
+  for (const [rx, ry] of [[2, 2], [13, 2], [2, 13], [13, 13]]) {
+    put(T.HULL, rx, ry, [214, 220, 228]);
+    put(T.HULL, rx + 1, ry + 1, [96, 102, 112]);
+  }
+
+  // Crack overlays: one random crack pattern revealed progressively over the stages.
+  const segments = [];
+  for (let k = 0; k < 6; k++) {
+    let x = 4 + rand() * 8, y = 4 + rand() * 8;
+    let a = rand() * Math.PI * 2;
+    for (let n = 0; n < 7; n++) {
+      a += (rand() - 0.5) * 1.6;
+      const nx = x + Math.cos(a) * 2.2, ny = y + Math.sin(a) * 2.2;
+      segments.push([x, y, nx, ny]);
+      x = nx; y = ny;
+    }
+  }
+  // Order segments roughly from the centre outwards so early stages show small cracks.
+  segments.sort((p, q) => Math.hypot(p[0] - 8, p[1] - 8) - Math.hypot(q[0] - 8, q[1] - 8));
+  for (let stage = 0; stage < CRACK_STAGES; stage++) {
+    const t = T.CRACK + stage;
+    each((x, y) => put(t, x, y, [0, 0, 0], 0));
+    const shown = Math.ceil(segments.length * (stage + 1) / CRACK_STAGES);
+    for (const [x0, y0, x1, y1] of segments.slice(0, shown)) {
+      for (let s = 0; s <= 1; s += 0.1) {
+        const px = Math.floor(x0 + (x1 - x0) * s), py = Math.floor(y0 + (y1 - y0) * s);
+        if (px >= 0 && py >= 0 && px < TILE && py < TILE) put(t, px, py, [20, 20, 22], 230);
+      }
+    }
+  }
 
   ctx.putImageData(img, 0, 0);
   return canvas;
