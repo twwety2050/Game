@@ -119,6 +119,12 @@ addEventListener('keydown', (e) => {
     if (n >= 1 && n <= 9) hud.select(n - 1);
   } else if (e.code === 'KeyF') {
     player.toggleFly();
+  } else if (e.code === 'KeyG' && locked && target) {
+    // Make the face you're looking at the floor: gravity pulls into that block.
+    if (player.setUp(new THREE.Vector3(target.nx, target.ny, target.nz))) hud.toast(`Gravity ${player.gravityLabel()}`);
+    else if (!player.up.equals(new THREE.Vector3(target.nx, target.ny, target.nz))) hud.toast('No room to turn');
+  } else if (e.code === 'KeyH' && locked) {
+    if (player.setUp(new THREE.Vector3(0, 1, 0))) hud.toast('Gravity reset');
   } else if (e.code === 'F3') {
     e.preventDefault();
     showDebug = !showDebug;
@@ -233,7 +239,7 @@ function frame(now) {
       `XYZ: ${p.x.toFixed(2)} / ${p.y.toFixed(2)} / ${p.z.toFixed(2)}`,
       `Chunk: ${Math.floor(p.x / 16)}, ${Math.floor(p.z / 16)}   loaded: ${world.chunks.size}`,
       `Facing: ${target ? `${BLOCKS[target.id].name} @ ${target.x} ${target.y} ${target.z}` : '-'}`,
-      `Mode: ${player.flying ? 'flying' : player.inWater ? 'swimming' : 'walking'}   seed: ${seed}`,
+      `Mode: ${player.flying ? 'flying' : player.inWater ? 'swimming' : 'walking'}   gravity: ${player.gravityLabel()}   seed: ${seed}`,
       `Draw calls: ${renderer.info.render.calls}  tris: ${renderer.info.render.triangles}`,
     ].join('\n'));
   }

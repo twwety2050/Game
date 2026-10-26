@@ -21,6 +21,7 @@ Any static file server works (`npx serve`, VS Code Live Server, GitHub Pages, â€
 - Face-culled chunk meshes with smooth ambient occlusion
 - Translucent water you can swim in, with an underwater fog effect
 - Walking, sprinting, jumping, flying, and AABB collision
+- Gravity in any of the six axis directions, with the player smoothly reorienting to the new "down"
 - Breaking, placing, and picking blocks, with a 9-slot hotbar
 - Day/night cycle with a square sun and moon
 - Saves automatically to `localStorage` (world edits, position, time, hotbar)
@@ -33,6 +34,8 @@ Any static file server works (`npx serve`, VS Code Live Server, GitHub Pages, â€
 | Space | Jump / swim / fly up |
 | Shift | Sprint / fly down |
 | F | Toggle flying |
+| G | Shift gravity: the surface you're looking at becomes the floor |
+| H | Reset gravity to normal |
 | Left click | Break block |
 | Right click | Place block |
 | Middle click | Pick block into hotbar |
@@ -46,7 +49,7 @@ Any static file server works (`npx serve`, VS Code Live Server, GitHub Pages, â€
 | --- | --- |
 | `src/main.js` | Renderer, input, block interaction, sky, game loop, saving |
 | `src/world.js` | Chunk storage, terrain generation, meshing, raycasting |
-| `src/player.js` | First-person movement and collision |
+| `src/player.js` | First-person movement, collision, and the gravity frame |
 | `src/blocks.js` | Block definitions |
 | `src/textures.js` | Procedural texture atlas |
 | `src/noise.js` | Seeded simplex noise and hashing |

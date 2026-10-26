@@ -34,7 +34,11 @@ export class Hud {
   select(i) {
     this.selected = (i + this.items.length) % this.items.length;
     this.slots.forEach((s, n) => s.el.classList.toggle('active', n === this.selected));
-    this.label.textContent = BLOCKS[this.current].name;
+    this.toast(BLOCKS[this.current].name);
+  }
+
+  toast(text) {
+    this.label.textContent = text;
     this.label.classList.add('show');
     clearTimeout(this.labelTimer);
     this.labelTimer = setTimeout(() => this.label.classList.remove('show'), 1500);
