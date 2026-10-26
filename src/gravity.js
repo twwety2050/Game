@@ -25,6 +25,7 @@ const TERRAIN_RANGE = 128;
 const _p = new THREE.Vector3();
 const _d = new THREE.Vector3();
 const _sum = new THREE.Vector3();
+const _part = new THREE.Vector3();
 
 // Strength at `dist` blocks from a source with the given full-strength and cut-off ranges.
 export function falloff(dist, full = FULL_RANGE, range = RANGE) {
@@ -60,11 +61,15 @@ function sourcePull(src, p, out) {
 // Gravity at world point `wp`. Writes the pull into `out` (world space; its length is the
 // strength in [0, 1]) and returns `out`. Gravity blocks on `exclude` (a ship asking about
 // itself) are ignored: a ship isn't pulled by its own generators.
-export function gravityAt(wp, world, ships, out = new THREE.Vector3(), exclude = null) {
+// If `shares` (a Map) is given, it receives each ship's share of the pull in [0, 1], so the
+// caller can pull those ships back (gravity is mutual).
+export function gravityAt(wp, world, ships, out = new THREE.Vector3(), exclude = null, shares = null) {
   _sum.set(0, 0, 0);
   let strongest = 0;
+  if (shares) shares.clear();
   for (const grid of [world, ...ships]) {
     if (grid === exclude || grid.gravitySources.size === 0) continue;
+    const before = shares && grid !== world ? _part.copy(_sum) : null;
     if (grid !== world && (grid.updateShape(), wp.distanceTo(grid.position) > grid.radius + RANGE + 1)) continue;
     grid.worldToLocal(wp, _p);
     grid.forEachGravitySource(_p, RANGE, (src) => {
@@ -73,6 +78,7 @@ export function gravityAt(wp, world, ships, out = new THREE.Vector3(), exclude =
       _sum.addScaledVector(grid.dirToWorld(_d, _d), s);
       if (s > strongest) strongest = s;
     });
+    if (before) shares.set(grid, before.subVectors(_sum, before).clone());
   }
 
   // The terrain layer (0 <= y < TERRAIN_HEIGHT) is a large body pulling toward itself.
@@ -84,5 +90,11 @@ export function gravityAt(wp, world, ships, out = new THREE.Vector3(), exclude =
   }
 
   if (_sum.lengthSq() < 1e-10) return out.set(0, 0, 0);
-  return out.copy(_sum).normalize().multiplyScalar(strongest);
+  out.copy(_sum).normalize();
+  if (shares) {
+    // Each ship's share: how much of the total pull its generators account for.
+    const total = _sum.length();
+    for (const [grid, part] of shares) shares.set(grid, Math.max(0, part.dot(out)) / total);
+  }
+  return out.multiplyScalar(strongest);
 }

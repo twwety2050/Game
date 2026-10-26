@@ -224,6 +224,30 @@ export class VoxelGrid {
     return false;
   }
 
+  // If local point p is inside a solid block, return how to get it out: the outward normal of
+  // the nearest face (preferring faces that open onto empty space) and the depth. Else null.
+  contactAt(p) {
+    const bx = Math.floor(p.x), by = Math.floor(p.y), bz = Math.floor(p.z);
+    const id = this.getBlock(bx, by, bz);
+    if (!SOLID[id]) return null;
+    const fx = p.x - bx, fy = p.y - by, fz = p.z - bz;
+    for (const b of blockBoxes(id, this.getMeta(bx, by, bz))) {
+      if (fx < b[0] || fx > b[3] || fy < b[1] || fy > b[4] || fz < b[2] || fz > b[5]) continue;
+      let best = null, bestScore = Infinity;
+      const faces = [[fx - b[0], -1, 0, 0, b[0] === 0], [b[3] - fx, 1, 0, 0, b[3] === 1],
+        [fy - b[1], 0, -1, 0, b[1] === 0], [b[4] - fy, 0, 1, 0, b[4] === 1],
+        [fz - b[2], 0, 0, -1, b[2] === 0], [b[5] - fz, 0, 0, 1, b[5] === 1]];
+      for (const [depth, nx, ny, nz, onCellFace] of faces) {
+        // A face flush with a solid neighbour is a poor way out: you'd come out inside it.
+        const buried = onCellFace && SOLID[this.getBlock(bx + nx, by + ny, bz + nz)];
+        const score = depth + (buried ? 4 : 0);
+        if (score < bestScore) { bestScore = score; best = { nx, ny, nz, depth }; }
+      }
+      return best;
+    }
+    return null;
+  }
+
   getDamage(x, y, z) {
     const cx = Math.floor(x / CS), cy = Math.floor(y / CS), cz = Math.floor(z / CS);
     const c = this.chunks.get(this.key(cx, cy, cz));

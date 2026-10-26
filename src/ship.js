@@ -3,6 +3,13 @@
 // Local block coordinates map to world space as  world = position + R * (local - com),
 // where `com` is the local centre of mass, so the ship rotates about its centre of mass.
 // Blocks can be added and removed at any time, including while the ship is moving.
+//
+// Ships are rigid bodies: every block has mass 1, and the inertia tensor comes from the
+// block layout. Gravity pulls on the centre of mass, and an uneven field (near gravity
+// blocks) also twists the ship. Contacts with the world and other ships are found by
+// probing the hull's corners and exposed face centres, then resolved with impulses at the
+// contact points (with friction and a little bounce), which is what makes ships tip, roll,
+// and tumble. Ships at rest go to sleep until something disturbs them.
 import * as THREE from 'three';
 import { VoxelGrid, SOLID, CS, idx } from './grid.js';
 import { B } from './blocks.js';
@@ -11,11 +18,24 @@ import { gravityAt, G } from './gravity.js';
 const _v = new THREE.Vector3();
 const _w = new THREE.Vector3();
 const _q = new THREE.Quaternion();
-const _prevPos = new THREE.Vector3();
-const _prevQuat = new THREE.Quaternion();
-const _g = new THREE.Vector3();
+const _r = new THREE.Vector3();
+const _j = new THREE.Vector3();
+const _t = new THREE.Vector3();
+const _vr = new THREE.Vector3();
+const _gs = [];
+const _shares = new Map();
 const GRAVITY_SAMPLES = 32;  // exposed blocks sampled when measuring the gravity on a ship
-const MAX_FALL_SPEED = 60;
+const MAX_SPEED = 60;
+const MAX_SPIN = 6;          // radians per second
+const RESTITUTION = 0.15;
+const FRICTION = 0.6;
+const SOLVER_ITERATIONS = 6;
+const PENETRATION_SLOP = 0.01;
+const SLEEP_SPEED = 0.12;    // below this (and spin), a supported ship starts to settle
+const SLEEP_TIME = 0.5;
+const PROBE_INSET = 0.02;
+const MIN_SUPPORT = 3;       // contacts needed to sleep (fewer = balanced on an edge or corner)
+const WOBBLE = 0.02;         // tiny random spin on a ship balanced on an edge or corner
 
 // Corners of a block, inset slightly so grids resting face-to-face don't count as overlapping.
 const INSET = 0.05;
@@ -45,7 +65,17 @@ export class Ship extends VoxelGrid {
     this.surface = [];                   // local coords of blocks exposed to the outside
     this.shapeDirty = true;
     this.gravity = new THREE.Vector3();  // average pull on the ship, world space, strength 0..1
+    this.gravityTorque = new THREE.Vector3(); // twist from an uneven gravity field, world space
+    this.pullers = new Map();            // ship -> share of our gravity its generators supply
     this.piloted = false;                // a pilot's thrusters hold the ship against gravity
+
+    this.invInertiaLocal = new THREE.Matrix3(); // inverse inertia tensor about the centre of mass
+    this.probes = [];                    // local points tested for contacts (flat x, y, z)
+    this.contacts = [];
+    this.sleeping = false;
+    this.restTime = 0;
+    this.sleepCheck = 0;
+    this.sleepGravity = new THREE.Vector3();
   }
 
   // ---------- transform ----------
@@ -91,14 +121,23 @@ export class Ship extends VoxelGrid {
       this.com.copy(newCom);
     }
     this.shapeDirty = true;
+    this.wake();
     this.syncTransform();
   }
 
-  // Recompute bounds, bounding radius, and the list of exposed blocks used for collisions.
+  // Recompute bounds, bounding radius, inertia, the list of exposed blocks, and the contact
+  // probe points.
   updateShape() {
     if (!this.shapeDirty) return;
     this.shapeDirty = false;
     this.surface = [];
+    this.probes = [];
+    const seen = new Set();
+    const probe = (x, y, z) => {
+      const key = x + ',' + y + ',' + z;
+      if (!seen.has(key)) { seen.add(key); this.probes.push(x, y, z); }
+    };
+    const inertia = [0, 0, 0, 0, 0, 0]; // xx, yy, zz, xy, xz, yz
     this.min.set(Infinity, Infinity, Infinity);
     this.max.set(-Infinity, -Infinity, -Infinity);
     for (const c of this.chunks.values()) {
@@ -109,12 +148,34 @@ export class Ship extends VoxelGrid {
         const x = ox + (i % CS), z = oz + (Math.floor(i / CS) % CS), y = oy + Math.floor(i / (CS * CS));
         this.min.min(_v.set(x, y, z));
         this.max.max(_v);
-        if (!this.isSolid(x + 1, y, z) || !this.isSolid(x - 1, y, z) || !this.isSolid(x, y + 1, z) ||
-          !this.isSolid(x, y - 1, z) || !this.isSolid(x, y, z + 1) || !this.isSolid(x, y, z - 1)) {
-          this.surface.push(x, y, z);
-        }
+        // Each block is a unit cube of mass 1: point mass at its centre plus its own 1/6.
+        const rx = x + 0.5 - this.com.x, ry = y + 0.5 - this.com.y, rz = z + 0.5 - this.com.z;
+        inertia[0] += ry * ry + rz * rz + 1 / 6;
+        inertia[1] += rx * rx + rz * rz + 1 / 6;
+        inertia[2] += rx * rx + ry * ry + 1 / 6;
+        inertia[3] -= rx * ry;
+        inertia[4] -= rx * rz;
+        inertia[5] -= ry * rz;
+        const open = [!this.isSolid(x - 0.5, y + 0.5, z + 0.5), !this.isSolid(x + 1.5, y + 0.5, z + 0.5),
+          !this.isSolid(x + 0.5, y - 0.5, z + 0.5), !this.isSolid(x + 0.5, y + 1.5, z + 0.5),
+          !this.isSolid(x + 0.5, y + 0.5, z - 0.5), !this.isSolid(x + 0.5, y + 0.5, z + 1.5)];
+        if (!open.some(Boolean)) continue;
+        this.surface.push(x, y, z);
+        // Corners are inset a hair toward the block's centre, so a corner sitting exactly on an
+        // obstacle's edge still counts as resting on it.
+        const lo = PROBE_INSET, hi = 1 - PROBE_INSET;
+        for (let k = 0; k < 8; k++) probe(x + (k & 1 ? hi : lo), y + (k & 2 ? hi : lo), z + (k & 4 ? hi : lo));
+        if (open[0]) probe(x, y + 0.5, z + 0.5);
+        if (open[1]) probe(x + 1, y + 0.5, z + 0.5);
+        if (open[2]) probe(x + 0.5, y, z + 0.5);
+        if (open[3]) probe(x + 0.5, y + 1, z + 0.5);
+        if (open[4]) probe(x + 0.5, y + 0.5, z);
+        if (open[5]) probe(x + 0.5, y + 0.5, z + 1);
       }
     }
+    const [ixx, iyy, izz, ixy, ixz, iyz] = inertia;
+    this.invInertiaLocal.set(ixx, ixy, ixz, ixy, iyy, iyz, ixz, iyz, izz);
+    if (this.blockCount > 0) this.invInertiaLocal.invert();
     let r = 0;
     for (const cx of [this.min.x, this.max.x + 1]) for (const cy of [this.min.y, this.max.y + 1]) for (const cz of [this.min.z, this.max.z + 1]) {
       r = Math.max(r, _v.set(cx, cy, cz).distanceTo(this.com));
@@ -153,64 +214,205 @@ export class Ship extends VoxelGrid {
 
   // ---------- motion ----------
 
-  // Average gravity over the ship: its centre of mass plus a spread of its exposed blocks, so
-  // a large ship feels a gravity plate its hull is near even if its centre is far away.
+  wake() {
+    this.sleeping = false;
+    this.restTime = 0;
+  }
+
+  // Average gravity over the ship (its centre of mass plus a spread of exposed blocks, so a
+  // large ship feels a gravity plate its hull is near), and the twist from any unevenness.
   measureGravity(world, ships) {
     this.updateShape();
-    this.gravity.set(0, 0, 0);
     const surf = this.surface, count = surf.length / 3;
     const stride = Math.max(1, Math.floor(count / GRAVITY_SAMPLES));
-    let n = 1;
-    this.gravity.add(gravityAt(this.position, world, ships, _g, this));
-    for (let i = 0; i < count; i += stride, n++) {
-      this.localToWorld(_v.set(surf[i * 3] + 0.5, surf[i * 3 + 1] + 0.5, surf[i * 3 + 2] + 0.5), _w);
-      this.gravity.add(gravityAt(_w, world, ships, _g, this));
+    _gs.length = 0;
+    this.pullers.clear();
+    const sample = (p) => {
+      _gs.push([p, gravityAt(p, world, ships, new THREE.Vector3(), this, _shares)]);
+      for (const [ship, share] of _shares) this.pullers.set(ship, (this.pullers.get(ship) ?? 0) + share);
+    };
+    sample(this.position.clone());
+    for (let i = 0; i < count; i += stride) {
+      sample(this.localToWorld(_v.set(surf[i * 3] + 0.5, surf[i * 3 + 1] + 0.5, surf[i * 3 + 2] + 0.5), new THREE.Vector3()));
     }
-    return this.gravity.divideScalar(n);
+    for (const [ship, share] of this.pullers) this.pullers.set(ship, share / _gs.length);
+    this.gravity.set(0, 0, 0);
+    for (const [, g] of _gs) this.gravity.add(g);
+    this.gravity.divideScalar(_gs.length);
+    // Torque from the part of the pull that differs across the ship; a uniform pull has none.
+    this.gravityTorque.set(0, 0, 0);
+    const massPerSample = this.blockCount / _gs.length;
+    for (const [p, g] of _gs) {
+      _r.subVectors(p, this.position);
+      _j.subVectors(g, this.gravity).multiplyScalar(G * massPerSample);
+      this.gravityTorque.add(_v.crossVectors(_r, _j));
+    }
+    return this.gravity;
+  }
+
+  // Apply the inverse world-space inertia tensor to a world vector.
+  applyInvInertia(v, out) {
+    return this.dirToWorld(this.dirToLocal(v, out).applyMatrix3(this.invInertiaLocal), out);
+  }
+
+  // Apply impulse J (world) at world point p.
+  applyImpulse(J, p) {
+    this.velocity.addScaledVector(J, 1 / this.blockCount);
+    _r.subVectors(p, this.position);
+    this.angularVelocity.add(this.applyInvInertia(_t.crossVectors(_r, J), _t));
+  }
+
+  // How hard it is to change this ship's velocity at point p along direction n.
+  effectiveInvMass(p, n) {
+    _r.subVectors(p, this.position);
+    const rn = this.applyInvInertia(_t.crossVectors(_r, n), _t);
+    return 1 / this.blockCount + n.dot(_v.crossVectors(rn, _r));
+  }
+
+  // Every probe point that is inside the world or another ship, with the way out.
+  findContacts(world, ships) {
+    const contacts = this.contacts;
+    contacts.length = 0;
+    const others = ships.filter((s) => s !== this && s.blockCount > 0 &&
+      (s.updateShape(), s.position.distanceTo(this.position) < s.radius + this.radius + 1));
+    const probes = this.probes;
+    for (let i = 0; i < probes.length; i += 3) {
+      const p = this.localToWorld(_w.set(probes[i], probes[i + 1], probes[i + 2]), new THREE.Vector3());
+      const c = world.contactAt(p);
+      if (c) contacts.push({ p, n: new THREE.Vector3(c.nx, c.ny, c.nz), depth: c.depth, other: null });
+      for (const s of others) {
+        const oc = s.contactAt(s.worldToLocal(p, _v));
+        if (oc) contacts.push({ p, n: s.dirToWorld(_v.set(oc.nx, oc.ny, oc.nz), new THREE.Vector3()), depth: oc.depth, other: s });
+      }
+    }
+    return contacts;
+  }
+
+  // Sequential impulses: stop each contact point moving into its obstacle (bouncing a little
+  // if it hit hard), with Coulomb friction. Returns the hardest impact speed.
+  resolveContacts(contacts) {
+    let impact = 0;
+    for (const c of contacts) {
+      _vr.copy(this.velocityAt(c.p, _vr));
+      if (c.other) _vr.sub(c.other.velocityAt(c.p, _v));
+      const vn = _vr.dot(c.n);
+      impact = Math.max(impact, -vn);
+      c.target = vn < -1 ? -RESTITUTION * vn : 0;
+      c.jn = 0;
+      c.k = this.effectiveInvMass(c.p, c.n) + (c.other ? c.other.effectiveInvMass(c.p, c.n) : 0);
+      if (c.other) c.other.wake();
+    }
+    for (let iter = 0; iter < SOLVER_ITERATIONS; iter++) {
+      for (const c of contacts) {
+        this.velocityAt(c.p, _vr);
+        if (c.other) _vr.sub(c.other.velocityAt(c.p, _v));
+        // Normal impulse, accumulated and kept non-negative (contacts push, never pull).
+        const vn = _vr.dot(c.n);
+        const jn = Math.max(c.jn + (c.target - vn) / c.k, 0);
+        const dj = jn - c.jn;
+        c.jn = jn;
+        if (dj !== 0) {
+          _j.copy(c.n).multiplyScalar(dj);
+          this.applyImpulse(_j, c.p);
+          if (c.other) c.other.applyImpulse(_j.negate(), c.p);
+        }
+        // Friction against the sliding direction, limited by the normal impulse.
+        this.velocityAt(c.p, _vr);
+        if (c.other) _vr.sub(c.other.velocityAt(c.p, _v));
+        _vr.addScaledVector(c.n, -_vr.dot(c.n));
+        const slide = _vr.length();
+        if (slide < 1e-6) continue;
+        const t = _vr.divideScalar(slide);
+        const kt = this.effectiveInvMass(c.p, t) + (c.other ? c.other.effectiveInvMass(c.p, t) : 0);
+        const jt = Math.min(slide / kt, FRICTION * c.jn);
+        _j.copy(t).multiplyScalar(-jt);
+        this.applyImpulse(_j, c.p);
+        if (c.other) c.other.applyImpulse(_j.negate(), c.p);
+      }
+    }
+    // Push out of any remaining overlap (shared with the other ship, if any).
+    _j.set(0, 0, 0);
+    for (const c of contacts) _j.addScaledVector(c.n, Math.max(c.depth - PENETRATION_SLOP, 0));
+    if (contacts.length) {
+      _j.multiplyScalar(0.8 / contacts.length);
+      this.position.add(_j);
+    }
+    return impact;
   }
 
   // Advance the ship. Returns the impact speed if it hit something this step, else 0.
   update(dt, world, ships) {
     if (this.blockCount === 0) return 0;
     this.updateShape();
+    if (this.piloted) this.wake();
 
-    // A ship that is already overlapping something (e.g. built into the ground) may move
-    // freely until it is clear, and isn't pulled by gravity meanwhile; otherwise movement
-    // stops at the first contact.
+    if (this.sleeping) {
+      // Every so often, check whether whatever we're resting on is still there and whether the
+      // gravity has changed.
+      this.sleepCheck -= dt;
+      if (this.sleepCheck > 0) return 0;
+      this.sleepCheck = 0.25;
+      this.measureGravity(world, ships);
+      const supported = this.findContacts(world, ships).length > 0;
+      if (supported && this.gravity.distanceTo(this.sleepGravity) < 0.02) return 0;
+      this.wake();
+    }
+
     this.measureGravity(world, ships);
     const pulled = !this.piloted && this.gravity.lengthSq() > 1e-6;
-    let speed = this.velocity.length();
-    const spin = this.angularVelocity.length();
-    if (!pulled && speed < 1e-4 && spin < 1e-4) return 0;
-    const startsClear = !this.intersectsAnything(world, ships);
-    if (pulled && startsClear) {
-      this.velocity.addScaledVector(this.gravity, G * dt);
-      if (this.velocity.length() > MAX_FALL_SPEED) this.velocity.setLength(MAX_FALL_SPEED);
-      speed = this.velocity.length();
-    }
-    if (speed < 1e-4 && spin < 1e-4) return 0;
-    const travel = (speed + spin * this.radius) * dt;
-    const steps = Math.min(20, Math.max(1, Math.ceil(travel / 0.25)));
+    if (!pulled && this.velocity.lengthSq() < 1e-8 && this.angularVelocity.lengthSq() < 1e-8) return 0;
+
+    const travel = (this.velocity.length() + this.angularVelocity.length() * this.radius) * dt;
+    const steps = Math.min(12, Math.max(Math.ceil(dt * 120), Math.ceil(travel / 0.3), 1));
     const sdt = dt / steps;
+    let impact = 0, support = 0;
     for (let i = 0; i < steps; i++) {
-      _prevPos.copy(this.position);
-      _prevQuat.copy(this.quaternion);
+      if (pulled) {
+        this.velocity.addScaledVector(this.gravity, G * sdt);
+        this.angularVelocity.add(this.applyInvInertia(_v.copy(this.gravityTorque).multiplyScalar(sdt), _v));
+        // Equal and opposite: ships whose generators pull us are pulled back toward us.
+        for (const [ship, share] of this.pullers) {
+          if (share <= 0 || ship.piloted) continue;
+          ship.velocity.addScaledVector(this.gravity, -G * sdt * share * this.blockCount / ship.blockCount);
+          ship.wake();
+        }
+      }
+      if (this.velocity.length() > MAX_SPEED) this.velocity.setLength(MAX_SPEED);
+      if (this.angularVelocity.length() > MAX_SPIN) this.angularVelocity.setLength(MAX_SPIN);
+
       this.position.addScaledVector(this.velocity, sdt);
-      if (spin > 0) {
+      const spin = this.angularVelocity.length();
+      if (spin > 1e-9) {
         _q.setFromAxisAngle(_v.copy(this.angularVelocity).divideScalar(spin), spin * sdt);
         this.quaternion.premultiply(_q);
       }
       this.syncTransform();
-      if (startsClear && this.intersectsAnything(world, ships)) {
-        this.position.copy(_prevPos);
-        this.quaternion.copy(_prevQuat);
+
+      const contacts = this.findContacts(world, ships);
+      support = contacts.length;
+      if (contacts.length) {
+        impact = Math.max(impact, this.resolveContacts(contacts));
         this.syncTransform();
-        this.velocity.set(0, 0, 0);
-        this.angularVelocity.set(0, 0, 0);
-        return Math.max(speed, 1e-3);
       }
     }
-    return 0;
+
+    // Settle: a supported ship that has (almost) stopped goes to sleep. One balanced on an edge
+    // or corner gets a tiny random nudge instead (real things never balance perfectly), so
+    // it topples if that balance is unstable.
+    const slow = this.velocity.length() < SLEEP_SPEED && this.angularVelocity.length() < SLEEP_SPEED;
+    if (slow && pulled && support > 0 && support < MIN_SUPPORT) {
+      this.angularVelocity.x += (Math.random() - 0.5) * WOBBLE;
+      this.angularVelocity.z += (Math.random() - 0.5) * WOBBLE;
+    }
+    this.restTime = support >= MIN_SUPPORT && slow && !this.piloted ? this.restTime + dt : 0;
+    if (this.restTime > SLEEP_TIME) {
+      this.sleeping = true;
+      this.sleepCheck = 0.25;
+      this.velocity.set(0, 0, 0);
+      this.angularVelocity.set(0, 0, 0);
+      this.sleepGravity.copy(this.gravity);
+    }
+    return impact;
   }
 
   // ---------- lifecycle ----------

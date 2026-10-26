@@ -27,7 +27,9 @@ Any static file server works (`npx serve`, VS Code Live Server, GitHub Pages, â€
   and slopes that pull toward their base. Full strength near them (jumping feels normal), fading to nothing
   at 10 blocks. The terrain is a large body with its own gravity that fades above it; elsewhere you float in
   zero-g with a jetpack. Gravity acts on ships too: they fall, land, and are pulled by other ships' generators
-  (never their own). A piloted ship's thrusters hold it against gravity
+  (never their own; the pull is mutual). A piloted ship's thrusters hold it against gravity
+- Ships are rigid bodies (mass and inertia from their blocks): they tip off ledges, roll off corners, tumble in
+  uneven gravity, and collide with friction and a little bounce; ships at rest go to sleep until disturbed
 - Gravity in any of the six axis directions, with the player smoothly reorienting to the new "down"
 - Ships: free-moving block grids you can stand on, walk around, pilot, and rebuild while they move.
   You ride along with a ship exactly (no sliding off), and neither you nor other ships can pass through it
