@@ -86,13 +86,16 @@ function wedgeBoxes(hb, hf, columns = 4) {
 }
 
 const DEFS = {
-  [SHAPE.FULL]: { polys: box(0, 0, 0, 1, 1, 1), boxes: [[0, 0, 0, 1, 1, 1]], full: 0b111111 },
-  [SHAPE.SLAB]: { polys: box(0, 0, 0, 1, 0.5, 1), boxes: [[0, 0, 0, 1, 0.5, 1]], full: 1 << 2 },
-  [SHAPE.PLATE]: { polys: box(0, 0, 0, 1, 0.125, 1), boxes: [[0, 0, 0, 1, 0.125, 1]], full: 1 << 2 },
-  [SHAPE.SLOPE]: { polys: wedge(1, 0), boxes: wedgeBoxes(1, 0), full: (1 << 2) | (1 << 4) },
-  [SHAPE.SLOPE_LOW]: { polys: wedge(0.5, 0), boxes: wedgeBoxes(0.5, 0, 2), full: 1 << 2 },
-  [SHAPE.SLOPE_HIGH]: { polys: wedge(1, 0.5), boxes: wedgeBoxes(1, 0.5, 2), full: (1 << 2) | (1 << 4) },
+  [SHAPE.FULL]: { polys: box(0, 0, 0, 1, 1, 1), boxes: [[0, 0, 0, 1, 1, 1]], full: 0b111111, volume: 1 },
+  [SHAPE.SLAB]: { polys: box(0, 0, 0, 1, 0.5, 1), boxes: [[0, 0, 0, 1, 0.5, 1]], full: 1 << 2, volume: 0.5 },
+  [SHAPE.PLATE]: { polys: box(0, 0, 0, 1, 0.125, 1), boxes: [[0, 0, 0, 1, 0.125, 1]], full: 1 << 2, volume: 0.125 },
+  [SHAPE.SLOPE]: { polys: wedge(1, 0), boxes: wedgeBoxes(1, 0), full: (1 << 2) | (1 << 4), volume: 0.5 },
+  [SHAPE.SLOPE_LOW]: { polys: wedge(0.5, 0), boxes: wedgeBoxes(0.5, 0, 2), full: 1 << 2, volume: 0.25 },
+  [SHAPE.SLOPE_HIGH]: { polys: wedge(1, 0.5), boxes: wedgeBoxes(1, 0.5, 2), full: (1 << 2) | (1 << 4), volume: 0.75 },
 };
+
+// Fraction of the cell a shape fills.
+export const shapeVolume = (shape) => DEFS[shape].volume;
 
 // ---------- rotated variants ----------
 

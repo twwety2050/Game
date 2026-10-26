@@ -537,7 +537,7 @@ function frame(now) {
       `XYZ: ${p.x.toFixed(2)} / ${p.y.toFixed(2)} / ${p.z.toFixed(2)}`,
       `Chunk: ${Math.floor(p.x / CS)}, ${Math.floor(p.y / CS)}, ${Math.floor(p.z / CS)}   loaded: ${world.chunks.size}`,
       `Facing: ${target ? `${BLOCKS[target.id].name} @ ${target.x} ${target.y} ${target.z}${target.grid === world ? '' : ' (ship)'}  damage ${Math.round(target.grid.getDamage(target.x, target.y, target.z) * 100)}%` : '-'}`,
-      `Ships: ${ships.length}   riding: ${ship ? `ship #${ships.indexOf(ship)} (${ship.blockCount} blocks, ${ship.velocity.length().toFixed(1)} m/s)` : 'world'}`,
+      `Ships: ${ships.length}   riding: ${ship ? `ship #${ships.indexOf(ship)} (${ship.blockCount} blocks, mass ${ship.mass.toFixed(1)}, ${ship.velocity.length().toFixed(1)} m/s${ship.buoyancy > 0 ? `, ${Math.round(ship.buoyancy * 100)}% submerged` : ''}${ship.sleeping ? ', resting' : ''})` : 'world'}`,
       `Mode: ${player.flying ? 'flying' : player.zeroG ? 'zero-g' : player.inWater ? 'swimming' : 'walking'}   gravity: ${player.gravityLabel()} ${Math.round(player.gravityStrength * 100)}%   seed: ${seed}`,
       `Draw calls: ${renderer.info.render.calls}  tris: ${renderer.info.render.triangles}`,
     ].join('\n'));

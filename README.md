@@ -30,6 +30,8 @@ Any static file server works (`npx serve`, VS Code Live Server, GitHub Pages, â€
   (never their own; the pull is mutual). A piloted ship's thrusters hold it against gravity
 - Ships are rigid bodies (mass and inertia from their blocks): they tip off ledges, roll off corners, tumble in
   uneven gravity, and collide with friction and a little bounce; ships at rest go to sleep until disturbed
+- Buoyancy: every block type has a density (hull 0.5, wood 0.6, stone 2.4, ...). Ships lighter than water float
+  at a matching waterline and right themselves when tilted; heavier ones sink
 - Gravity in any of the six axis directions, with the player smoothly reorienting to the new "down"
 - Ships: free-moving block grids you can stand on, walk around, pilot, and rebuild while they move.
   You ride along with a ship exactly (no sliding off), and neither you nor other ships can pass through it

@@ -1,5 +1,5 @@
 // Block registry. Texture values are tile indices into the generated atlas (see textures.js).
-import { SHAPE } from './shapes.js';
+import { SHAPE, shapeVolume } from './shapes.js';
 
 export const B = {
   AIR: 0, GRASS: 1, DIRT: 2, STONE: 3, SAND: 4, LOG: 5, LEAVES: 6, PLANKS: 7,
@@ -39,28 +39,31 @@ function def(id, name, tex, opts = {}) {
     // Gravity generator: 'radial' pulls toward the block from every side, 'directional'
     // pulls toward the block's base (its canonical -Y, rotated by its orientation).
     gravity: opts.gravity ?? null,
+    // Density relative to water (below 1 floats). A block's mass is density x shape volume.
+    density: opts.density ?? 1,
+    mass: (opts.density ?? 1) * shapeVolume(opts.shape ?? SHAPE.FULL),
   };
 }
 
 def(B.AIR, 'Air', { all: 0 }, { solid: false, opaque: false, placeable: false });
-def(B.GRASS, 'Grass Block', { top: T.GRASS_TOP, side: T.GRASS_SIDE, bottom: T.DIRT }, { hardness: 0.6 });
-def(B.DIRT, 'Dirt', { all: T.DIRT }, { hardness: 0.5 });
-def(B.STONE, 'Stone', { all: T.STONE }, { hardness: 1.5 });
-def(B.SAND, 'Sand', { all: T.SAND }, { hardness: 0.5 });
-def(B.LOG, 'Oak Log', { top: T.LOG_TOP, side: T.LOG_SIDE, bottom: T.LOG_TOP }, { hardness: 1.0 });
-def(B.LEAVES, 'Oak Leaves', { all: T.LEAVES }, { opaque: false, selfFaces: true, occludes: true, hardness: 0.2 });
-def(B.PLANKS, 'Oak Planks', { all: T.PLANKS }, { hardness: 1.0 });
-def(B.COBBLE, 'Cobblestone', { all: T.COBBLE }, { hardness: 1.5 });
-def(B.GLASS, 'Glass', { all: T.GLASS }, { opaque: false, hardness: 0.3 });
+def(B.GRASS, 'Grass Block', { top: T.GRASS_TOP, side: T.GRASS_SIDE, bottom: T.DIRT }, { hardness: 0.6, density: 1.5 });
+def(B.DIRT, 'Dirt', { all: T.DIRT }, { hardness: 0.5, density: 1.5 });
+def(B.STONE, 'Stone', { all: T.STONE }, { hardness: 1.5, density: 2.4 });
+def(B.SAND, 'Sand', { all: T.SAND }, { hardness: 0.5, density: 1.6 });
+def(B.LOG, 'Oak Log', { top: T.LOG_TOP, side: T.LOG_SIDE, bottom: T.LOG_TOP }, { hardness: 1.0, density: 0.7 });
+def(B.LEAVES, 'Oak Leaves', { all: T.LEAVES }, { opaque: false, selfFaces: true, occludes: true, hardness: 0.2, density: 0.3 });
+def(B.PLANKS, 'Oak Planks', { all: T.PLANKS }, { hardness: 1.0, density: 0.6 });
+def(B.COBBLE, 'Cobblestone', { all: T.COBBLE }, { hardness: 1.5, density: 2.2 });
+def(B.GLASS, 'Glass', { all: T.GLASS }, { opaque: false, hardness: 0.3, density: 1.5 });
 def(B.WATER, 'Water', { all: T.WATER }, { solid: false, opaque: false, liquid: true, breakable: false, placeable: false });
 def(B.BEDROCK, 'Bedrock', { all: T.BEDROCK }, { breakable: false, placeable: false });
-def(B.BRICK, 'Bricks', { all: T.BRICK }, { hardness: 1.5 });
-def(B.SNOW, 'Snowy Grass', { top: T.SNOW, side: T.SNOW_SIDE, bottom: T.DIRT }, { hardness: 0.6 });
-def(B.COAL_ORE, 'Coal Ore', { all: T.COAL_ORE }, { hardness: 2 });
-def(B.IRON_ORE, 'Iron Ore', { all: T.IRON_ORE }, { hardness: 2.5 });
+def(B.BRICK, 'Bricks', { all: T.BRICK }, { hardness: 1.5, density: 2.0 });
+def(B.SNOW, 'Snowy Grass', { top: T.SNOW, side: T.SNOW_SIDE, bottom: T.DIRT }, { hardness: 0.6, density: 1.5 });
+def(B.COAL_ORE, 'Coal Ore', { all: T.COAL_ORE }, { hardness: 2, density: 2.6 });
+def(B.IRON_ORE, 'Iron Ore', { all: T.IRON_ORE }, { hardness: 2.5, density: 3.5 });
 
-// Ship hull: metal plating whose damage is permanent.
-const hull = (shape) => ({ shape, hardness: 4, permanentDamage: true });
+// Ship hull: thin metal plating around a light frame (so hulls float), with permanent damage.
+const hull = (shape) => ({ shape, hardness: 4, permanentDamage: true, density: 0.5 });
 def(B.HULL, 'Hull Block', { all: T.HULL }, hull(SHAPE.FULL));
 def(B.HULL_SLAB, 'Hull Half Block', { all: T.HULL }, hull(SHAPE.SLAB));
 def(B.HULL_PLATE, 'Hull Plate', { all: T.HULL }, hull(SHAPE.PLATE));
@@ -69,7 +72,7 @@ def(B.HULL_SLOPE_LOW, 'Hull Slope 26.6° (low)', { all: T.HULL }, hull(SHAPE.SLO
 def(B.HULL_SLOPE_HIGH, 'Hull Slope 26.6° (high)', { all: T.HULL }, hull(SHAPE.SLOPE_HIGH));
 
 // Gravity generators. The emitter face is the one you stand on; shaped ones pull toward their base.
-const grav = (shape) => ({ shape, hardness: 4, permanentDamage: true, gravity: shape === SHAPE.FULL ? 'radial' : 'directional' });
+const grav = (shape) => ({ shape, hardness: 4, permanentDamage: true, density: 0.8, gravity: shape === SHAPE.FULL ? 'radial' : 'directional' });
 const gravTex = { top: T.GRAVITY, side: T.GRAVITY_SIDE, bottom: T.GRAVITY_SIDE };
 def(B.GRAVITY, 'Gravity Block', { all: T.GRAVITY }, grav(SHAPE.FULL));
 def(B.GRAVITY_SLAB, 'Gravity Plate', gravTex, grav(SHAPE.SLAB));

@@ -4,15 +4,16 @@
 // where `com` is the local centre of mass, so the ship rotates about its centre of mass.
 // Blocks can be added and removed at any time, including while the ship is moving.
 //
-// Ships are rigid bodies: every block has mass 1, and the inertia tensor comes from the
-// block layout. Gravity pulls on the centre of mass, and an uneven field (near gravity
+// Ships are rigid bodies: each block's mass is its density times its shape's volume, and the
+// inertia tensor comes from the block layout. In water, every block is pushed up by the water
+// it displaces (density 1), so ships lighter than water float and right themselves. Gravity pulls on the centre of mass, and an uneven field (near gravity
 // blocks) also twists the ship. Contacts with the world and other ships are found by
 // probing the hull's corners and exposed face centres, then resolved with impulses at the
 // contact points (with friction and a little bounce), which is what makes ships tip, roll,
 // and tumble. Ships at rest go to sleep until something disturbs them.
 import * as THREE from 'three';
 import { VoxelGrid, SOLID, CS, idx } from './grid.js';
-import { B } from './blocks.js';
+import { B, BLOCKS } from './blocks.js';
 import { gravityAt, G } from './gravity.js';
 
 const _v = new THREE.Vector3();
@@ -33,6 +34,8 @@ const SOLVER_ITERATIONS = 6;
 const PENETRATION_SLOP = 0.01;
 const SLEEP_SPEED = 0.12;    // below this (and spin), a supported ship starts to settle
 const SLEEP_TIME = 0.5;
+const WATER_DRAG = 4;        // velocity damping per second when fully submerged
+const WATER_SURFACE = 0.88;  // height of the water surface within the top water block
 const PROBE_INSET = 0.02;
 const MIN_SUPPORT = 3;       // contacts needed to sleep (fewer = balanced on an edge or corner)
 const WOBBLE = 0.02;         // tiny random spin on a ship balanced on an edge or corner
@@ -56,8 +59,10 @@ export class Ship extends VoxelGrid {
     this.angularVelocity = new THREE.Vector3(); // world space, radians per second
     this.invQuaternion = new THREE.Quaternion();
 
-    this.blockCount = 0;
-    this.blockSum = new THREE.Vector3(); // sum of solid block centres, for the centre of mass
+    this.blockCount = 0;                 // number of solid blocks
+    this.mass = 0;
+    this.blockSum = new THREE.Vector3(); // mass-weighted sum of solid block centres
+    this.buoyancy = 0;                   // fraction of the ship's volume under water (for display)
     this.com = new THREE.Vector3();
     this.min = new THREE.Vector3();      // local bounds of solid blocks (inclusive block coords)
     this.max = new THREE.Vector3();
@@ -106,17 +111,18 @@ export class Ship extends VoxelGrid {
   // ---------- shape ----------
 
   onBlockChanged(x, y, z, old, id) {
-    const wasSolid = SOLID[old] === 1, isSolid = SOLID[id] === 1;
-    if (wasSolid === isSolid) return;
-    const sign = isSolid ? 1 : -1;
-    this.blockCount += sign;
-    this.blockSum.x += sign * (x + 0.5);
-    this.blockSum.y += sign * (y + 0.5);
-    this.blockSum.z += sign * (z + 0.5);
+    const oldMass = SOLID[old] ? BLOCKS[old].mass : 0, newMass = SOLID[id] ? BLOCKS[id].mass : 0;
+    this.blockCount += SOLID[id] - SOLID[old];
+    if (oldMass === newMass) { this.shapeDirty = true; this.wake(); return; }
+    const dm = newMass - oldMass;
+    this.mass += dm;
+    this.blockSum.x += dm * (x + 0.5);
+    this.blockSum.y += dm * (y + 0.5);
+    this.blockSum.z += dm * (z + 0.5);
 
     // Move the centre of mass without moving the ship: shift `position` to compensate.
-    if (this.blockCount > 0) {
-      const newCom = _w.copy(this.blockSum).divideScalar(this.blockCount);
+    if (this.blockCount > 0 && this.mass > 0) {
+      const newCom = _w.copy(this.blockSum).divideScalar(this.mass);
       this.position.add(_v.subVectors(newCom, this.com).applyQuaternion(this.quaternion));
       this.com.copy(newCom);
     }
@@ -132,6 +138,7 @@ export class Ship extends VoxelGrid {
     this.shapeDirty = false;
     this.surface = [];
     this.probes = [];
+    this.blocks = [];                    // every solid block: x, y, z, id (flat)
     const seen = new Set();
     const probe = (x, y, z) => {
       const key = x + ',' + y + ',' + z;
@@ -148,14 +155,16 @@ export class Ship extends VoxelGrid {
         const x = ox + (i % CS), z = oz + (Math.floor(i / CS) % CS), y = oy + Math.floor(i / (CS * CS));
         this.min.min(_v.set(x, y, z));
         this.max.max(_v);
-        // Each block is a unit cube of mass 1: point mass at its centre plus its own 1/6.
+        this.blocks.push(x, y, z, c.data[i]);
+        // Each block is a point mass at its centre plus a uniform cube's own inertia (m/6).
+        const m = BLOCKS[c.data[i]].mass;
         const rx = x + 0.5 - this.com.x, ry = y + 0.5 - this.com.y, rz = z + 0.5 - this.com.z;
-        inertia[0] += ry * ry + rz * rz + 1 / 6;
-        inertia[1] += rx * rx + rz * rz + 1 / 6;
-        inertia[2] += rx * rx + ry * ry + 1 / 6;
-        inertia[3] -= rx * ry;
-        inertia[4] -= rx * rz;
-        inertia[5] -= ry * rz;
+        inertia[0] += m * (ry * ry + rz * rz + 1 / 6);
+        inertia[1] += m * (rx * rx + rz * rz + 1 / 6);
+        inertia[2] += m * (rx * rx + ry * ry + 1 / 6);
+        inertia[3] -= m * rx * ry;
+        inertia[4] -= m * rx * rz;
+        inertia[5] -= m * ry * rz;
         const open = [!this.isSolid(x - 0.5, y + 0.5, z + 0.5), !this.isSolid(x + 1.5, y + 0.5, z + 0.5),
           !this.isSolid(x + 0.5, y - 0.5, z + 0.5), !this.isSolid(x + 0.5, y + 1.5, z + 0.5),
           !this.isSolid(x + 0.5, y + 0.5, z - 0.5), !this.isSolid(x + 0.5, y + 0.5, z + 1.5)];
@@ -241,7 +250,7 @@ export class Ship extends VoxelGrid {
     this.gravity.divideScalar(_gs.length);
     // Torque from the part of the pull that differs across the ship; a uniform pull has none.
     this.gravityTorque.set(0, 0, 0);
-    const massPerSample = this.blockCount / _gs.length;
+    const massPerSample = this.mass / _gs.length;
     for (const [p, g] of _gs) {
       _r.subVectors(p, this.position);
       _j.subVectors(g, this.gravity).multiplyScalar(G * massPerSample);
@@ -257,7 +266,7 @@ export class Ship extends VoxelGrid {
 
   // Apply impulse J (world) at world point p.
   applyImpulse(J, p) {
-    this.velocity.addScaledVector(J, 1 / this.blockCount);
+    this.velocity.addScaledVector(J, 1 / this.mass);
     _r.subVectors(p, this.position);
     this.angularVelocity.add(this.applyInvInertia(_t.crossVectors(_r, J), _t));
   }
@@ -266,7 +275,47 @@ export class Ship extends VoxelGrid {
   effectiveInvMass(p, n) {
     _r.subVectors(p, this.position);
     const rn = this.applyInvInertia(_t.crossVectors(_r, n), _t);
-    return 1 / this.blockCount + n.dot(_v.crossVectors(rn, _r));
+    return 1 / this.mass + n.dot(_v.crossVectors(rn, _r));
+  }
+
+  // How much of a block centred at world point p (unit height) is under water.
+  submergedFraction(world, p) {
+    const x = Math.floor(p.x), z = Math.floor(p.z);
+    const bottom = p.y - 0.5, top = p.y + 0.5;
+    let wet = 0;
+    for (let y = Math.floor(bottom); y <= Math.floor(top); y++) {
+      if (world.getBlock(x, y, z) !== B.WATER) continue;
+      const surface = y + (world.getBlock(x, y + 1, z) === B.WATER ? 1 : WATER_SURFACE);
+      wet += Math.max(0, Math.min(top, surface) - Math.max(bottom, y));
+    }
+    return wet;
+  }
+
+  // Buoyancy (Archimedes): each block is pushed against gravity by the weight of the water
+  // it displaces, at its own position, so a tilted ship is also turned back upright. Also
+  // returns the drag factor from how much of the ship is wet.
+  measureBuoyancy(world) {
+    this.buoyancyForce = this.buoyancyForce ?? new THREE.Vector3();
+    this.buoyancyTorque = this.buoyancyTorque ?? new THREE.Vector3();
+    this.buoyancyForce.set(0, 0, 0);
+    this.buoyancyTorque.set(0, 0, 0);
+    this.buoyancy = 0;
+    if (this.gravity.lengthSq() < 1e-8) return;
+    const blocks = this.blocks;
+    let wetVolume = 0, volume = 0;
+    for (let i = 0; i < blocks.length; i += 4) {
+      const v = BLOCKS[blocks[i + 3]].mass / BLOCKS[blocks[i + 3]].density;
+      volume += v;
+      const p = this.localToWorld(_v.set(blocks[i] + 0.5, blocks[i + 1] + 0.5, blocks[i + 2] + 0.5), _w);
+      const wet = this.submergedFraction(world, p);
+      if (wet === 0) continue;
+      wetVolume += wet * v;
+      _j.copy(this.gravity).multiplyScalar(-G * wet * v); // water density is 1
+      this.buoyancyForce.add(_j);
+      _r.subVectors(p, this.position);
+      this.buoyancyTorque.add(_t.crossVectors(_r, _j));
+    }
+    this.buoyancy = volume > 0 ? wetVolume / volume : 0;
   }
 
   // Every probe point that is inside the world or another ship, with the way out.
@@ -361,6 +410,8 @@ export class Ship extends VoxelGrid {
     this.measureGravity(world, ships);
     const pulled = !this.piloted && this.gravity.lengthSq() > 1e-6;
     if (!pulled && this.velocity.lengthSq() < 1e-8 && this.angularVelocity.lengthSq() < 1e-8) return 0;
+    if (pulled) this.measureBuoyancy(world);
+    else this.buoyancy = 0;
 
     const travel = (this.velocity.length() + this.angularVelocity.length() * this.radius) * dt;
     const steps = Math.min(12, Math.max(Math.ceil(dt * 120), Math.ceil(travel / 0.3), 1));
@@ -370,10 +421,17 @@ export class Ship extends VoxelGrid {
       if (pulled) {
         this.velocity.addScaledVector(this.gravity, G * sdt);
         this.angularVelocity.add(this.applyInvInertia(_v.copy(this.gravityTorque).multiplyScalar(sdt), _v));
+        if (this.buoyancy > 0) {
+          this.velocity.addScaledVector(this.buoyancyForce, sdt / this.mass);
+          this.angularVelocity.add(this.applyInvInertia(_v.copy(this.buoyancyTorque).multiplyScalar(sdt), _v));
+          const drag = Math.exp(-WATER_DRAG * this.buoyancy * sdt);
+          this.velocity.multiplyScalar(drag);
+          this.angularVelocity.multiplyScalar(drag);
+        }
         // Equal and opposite: ships whose generators pull us are pulled back toward us.
         for (const [ship, share] of this.pullers) {
           if (share <= 0 || ship.piloted) continue;
-          ship.velocity.addScaledVector(this.gravity, -G * sdt * share * this.blockCount / ship.blockCount);
+          ship.velocity.addScaledVector(this.gravity, -G * sdt * share * this.mass / ship.mass);
           ship.wake();
         }
       }
