@@ -30,14 +30,15 @@ Minecraft's core systems (a voxel world, building block by block, crafting) but 
 4. **Zero-g movement and gravity plates:** drifting movement, plus gravity plates that create local gravity. *Done:*
    gravity blocks, plates and slopes with distance falloff, zero-g with a jetpack.
 5. **Ships:** turn a group of blocks into a ship entity that can be piloted and moved as one. *Started:* ships are
-   moving block grids you can ride, pilot, and rebuild while they move (spawned with N for now).
+   moving block grids you can ride, pilot, and rebuild while they move, flown with thrusters mapped to keys
+   on a navigation console.
 6. **Body gravity:** large bodies attract the player and objects according to their mass and distance. *Started:*
    the terrain layer pulls like a large body, fading with distance.
 
 ## Open questions
 
 - What counts as a "ship": every block connected to a cockpit or control block, or something else?
-- How is a ship powered and steered (thrusters, fuel or energy)?
+- How are thrusters powered (fuel or energy)? Do they need more control keys (up/down, roll)?
 - What do large bodies look like: voxel asteroids and planets you can land on and mine, or something else?
 - Is there survival (health, oxygen, resources), or is it creative-first?
 - Which way is "down" on a gravity plate: always the plate's facing direction?

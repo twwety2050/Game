@@ -6,12 +6,14 @@ export const B = {
   COBBLE: 8, GLASS: 9, WATER: 10, BEDROCK: 11, BRICK: 12, SNOW: 13, COAL_ORE: 14, IRON_ORE: 15,
   HULL: 16, HULL_SLAB: 17, HULL_PLATE: 18, HULL_SLOPE: 19, HULL_SLOPE_LOW: 20, HULL_SLOPE_HIGH: 21,
   GRAVITY: 22, GRAVITY_SLAB: 23, GRAVITY_SLOPE: 24, GRAVITY_SLOPE_LOW: 25, GRAVITY_SLOPE_HIGH: 26,
+  THRUSTER: 27, NAV_CONSOLE: 28,
 };
 
 export const T = {
   GRASS_TOP: 0, GRASS_SIDE: 1, DIRT: 2, STONE: 3, SAND: 4, LOG_SIDE: 5, LOG_TOP: 6, LEAVES: 7,
   PLANKS: 8, COBBLE: 9, GLASS: 10, WATER: 11, BEDROCK: 12, BRICK: 13, SNOW: 14, SNOW_SIDE: 15,
   COAL_ORE: 16, IRON_ORE: 17, HULL: 18, GRAVITY: 19, GRAVITY_SIDE: 20,
+  THRUSTER_SIDE: 21, THRUSTER_NOZZLE: 22, CONSOLE_SCREEN: 23, CONSOLE_SIDE: 32,
   CRACK: 24, // 8 crack stages: tiles 24..31
 };
 export const CRACK_STAGES = 8;
@@ -42,6 +44,8 @@ function def(id, name, tex, opts = {}) {
     // Density relative to water (below 1 floats). A block's mass is density x shape volume.
     density: opts.density ?? 1,
     mass: (opts.density ?? 1) * shapeVolume(opts.shape ?? SHAPE.FULL),
+    thruster: opts.thruster ?? false, // pushes its ship away from its nozzle when fired
+    console: opts.console ?? false,   // navigation console: maps keys to thrusters
   };
 }
 
@@ -80,4 +84,10 @@ def(B.GRAVITY_SLOPE, 'Gravity Slope 45°', gravTex, grav(SHAPE.SLOPE));
 def(B.GRAVITY_SLOPE_LOW, 'Gravity Slope 26.6° (low)', gravTex, grav(SHAPE.SLOPE_LOW));
 def(B.GRAVITY_SLOPE_HIGH, 'Gravity Slope 26.6° (high)', gravTex, grav(SHAPE.SLOPE_HIGH));
 
-export const HOTBAR = [B.HULL, B.HULL_SLAB, B.HULL_PLATE, B.HULL_SLOPE, B.HULL_SLOPE_LOW, B.HULL_SLOPE_HIGH, B.GRAVITY_SLAB, B.GRAVITY, B.GLASS];
+// Ship systems.
+def(B.THRUSTER, 'Thruster', { top: T.THRUSTER_NOZZLE, side: T.THRUSTER_SIDE, bottom: T.HULL },
+  { shape: SHAPE.THRUSTER, hardness: 3, permanentDamage: true, density: 1.2, thruster: true });
+def(B.NAV_CONSOLE, 'Navigation Console', { top: T.CONSOLE_SCREEN, side: T.CONSOLE_SIDE, bottom: T.CONSOLE_SIDE },
+  { shape: SHAPE.CONSOLE, hardness: 2, permanentDamage: true, density: 0.8, console: true });
+
+export const HOTBAR = [B.HULL, B.HULL_SLAB, B.HULL_PLATE, B.HULL_SLOPE, B.THRUSTER, B.NAV_CONSOLE, B.GRAVITY_SLAB, B.GRAVITY, B.GLASS];

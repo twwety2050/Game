@@ -14,6 +14,7 @@
 import * as THREE from 'three';
 import { VoxelGrid, SOLID, CS, idx } from './grid.js';
 import { B, BLOCKS } from './blocks.js';
+import { applyRotation } from './shapes.js';
 import { gravityAt, G } from './gravity.js';
 
 const _v = new THREE.Vector3();
@@ -35,6 +36,18 @@ const PENETRATION_SLOP = 0.01;
 const SLEEP_SPEED = 0.12;    // below this (and spin), a supported ship starts to settle
 const SLEEP_TIME = 0.5;
 const WATER_DRAG = 4;        // velocity damping per second when fully submerged
+export const THRUST = 400;   // force of one thruster (mass x blocks/s^2)
+export const CONTROL_KEYS = ['W', 'A', 'S', 'D'];
+
+// Flame shown at a firing thruster's nozzle: a cone pointing out along +Y, glowing additively.
+const FLAME_GEOMETRY = new THREE.ConeGeometry(0.22, 1.1, 10, 1, true).translate(0, 0.55, 0);
+const FLAME_MATERIAL = new THREE.MeshBasicMaterial({
+  color: 0xff7a1a, transparent: true, opacity: 0.8, depthWrite: false, side: THREE.DoubleSide, fog: false,
+});
+const FLAME_CORE = new THREE.MeshBasicMaterial({
+  color: 0xfff2c0, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false,
+});
+const _up = new THREE.Vector3(0, 1, 0);
 const WATER_SURFACE = 0.88;  // height of the water surface within the top water block
 const PROBE_INSET = 0.02;
 const MIN_SUPPORT = 3;       // contacts needed to sleep (fewer = balanced on an edge or corner)
@@ -72,7 +85,11 @@ export class Ship extends VoxelGrid {
     this.gravity = new THREE.Vector3();  // average pull on the ship, world space, strength 0..1
     this.gravityTorque = new THREE.Vector3(); // twist from an uneven gravity field, world space
     this.pullers = new Map();            // ship -> share of our gravity its generators supply
-    this.piloted = false;                // a pilot's thrusters hold the ship against gravity
+    this.piloted = false;                // someone is at the helm (keeps the ship awake)
+    this.thrusters = new Map();          // "x,y,z" -> { x, y, z, nozzle: [dx, dy, dz] } (local)
+    this.firing = new Set();             // keys of thrusters firing this frame
+    this.consoles = new Map();           // console "x,y,z" -> { W: [thruster keys], A, S, D }
+    this.flames = new Map();             // thruster key -> flame mesh
 
     this.invInertiaLocal = new THREE.Matrix3(); // inverse inertia tensor about the centre of mass
     this.probes = [];                    // local points tested for contacts (flat x, y, z)
@@ -139,6 +156,7 @@ export class Ship extends VoxelGrid {
     this.surface = [];
     this.probes = [];
     this.blocks = [];                    // every solid block: x, y, z, id (flat)
+    this.thrusters.clear();
     const seen = new Set();
     const probe = (x, y, z) => {
       const key = x + ',' + y + ',' + z;
@@ -156,6 +174,10 @@ export class Ship extends VoxelGrid {
         this.min.min(_v.set(x, y, z));
         this.max.max(_v);
         this.blocks.push(x, y, z, c.data[i]);
+        if (BLOCKS[c.data[i]].thruster) {
+          const meta = c.meta ? c.meta[i] : 0;
+          this.thrusters.set(x + ',' + y + ',' + z, { x, y, z, nozzle: applyRotation(meta, [0, 1, 0]) });
+        }
         // Each block is a point mass at its centre plus a uniform cube's own inertia (m/6).
         const m = BLOCKS[c.data[i]].mass;
         const rx = x + 0.5 - this.com.x, ry = y + 0.5 - this.com.y, rz = z + 0.5 - this.com.z;
@@ -408,8 +430,10 @@ export class Ship extends VoxelGrid {
     }
 
     this.measureGravity(world, ships);
-    const pulled = !this.piloted && this.gravity.lengthSq() > 1e-6;
-    if (!pulled && this.velocity.lengthSq() < 1e-8 && this.angularVelocity.lengthSq() < 1e-8) return 0;
+    const pulled = this.gravity.lengthSq() > 1e-6;
+    const thrusting = this.firing.size > 0;
+    if (thrusting) this.wake();
+    if (!pulled && !thrusting && this.velocity.lengthSq() < 1e-8 && this.angularVelocity.lengthSq() < 1e-8) return 0;
     if (pulled) this.measureBuoyancy(world);
     else this.buoyancy = 0;
 
@@ -430,10 +454,17 @@ export class Ship extends VoxelGrid {
         }
         // Equal and opposite: ships whose generators pull us are pulled back toward us.
         for (const [ship, share] of this.pullers) {
-          if (share <= 0 || ship.piloted) continue;
+          if (share <= 0) continue;
           ship.velocity.addScaledVector(this.gravity, -G * sdt * share * this.mass / ship.mass);
           ship.wake();
         }
+      }
+      // Each firing thruster pushes away from its nozzle, at its own position.
+      for (const key of this.firing) {
+        const t = this.thrusters.get(key);
+        if (!t) continue;
+        this.dirToWorld(_j.set(-t.nozzle[0], -t.nozzle[1], -t.nozzle[2]), _j).multiplyScalar(THRUST * sdt);
+        this.applyImpulse(_j, this.localToWorld(_w.set(t.x + 0.5, t.y + 0.5, t.z + 0.5), _w));
       }
       if (this.velocity.length() > MAX_SPEED) this.velocity.setLength(MAX_SPEED);
       if (this.angularVelocity.length() > MAX_SPIN) this.angularVelocity.setLength(MAX_SPIN);
@@ -457,7 +488,7 @@ export class Ship extends VoxelGrid {
     // Settle: a supported ship that has (almost) stopped goes to sleep. One balanced on an edge
     // or corner gets a tiny random nudge instead (real things never balance perfectly), so
     // it topples if that balance is unstable.
-    const slow = this.velocity.length() < SLEEP_SPEED && this.angularVelocity.length() < SLEEP_SPEED;
+    const slow = this.velocity.length() < SLEEP_SPEED && this.angularVelocity.length() < SLEEP_SPEED && !thrusting;
     if (slow && pulled && support > 0 && support < MIN_SUPPORT) {
       this.angularVelocity.x += (Math.random() - 0.5) * WOBBLE;
       this.angularVelocity.z += (Math.random() - 0.5) * WOBBLE;
@@ -471,6 +502,46 @@ export class Ship extends VoxelGrid {
       this.sleepGravity.copy(this.gravity);
     }
     return impact;
+  }
+
+  // ---------- thrusters & consoles ----------
+
+  // The key bindings of the console at local (x, y, z), created empty on first use.
+  consoleBindings(key) {
+    let b = this.consoles.get(key);
+    if (!b) {
+      b = Object.fromEntries(CONTROL_KEYS.map((k) => [k, []]));
+      this.consoles.set(key, b);
+    }
+    return b;
+  }
+
+  // Show a flickering flame at every firing thruster's nozzle.
+  updateFlames() {
+    for (const [key, flame] of this.flames) {
+      if (!this.firing.has(key) || !this.thrusters.has(key)) {
+        this.group.remove(flame);
+        this.flames.delete(key);
+      }
+    }
+    for (const key of this.firing) {
+      const t = this.thrusters.get(key);
+      if (!t) continue;
+      let flame = this.flames.get(key);
+      if (!flame) {
+        flame = new THREE.Mesh(FLAME_GEOMETRY, FLAME_MATERIAL);
+        const core = new THREE.Mesh(FLAME_GEOMETRY, FLAME_CORE);
+        core.scale.set(0.5, 0.7, 0.5);
+        flame.add(core);
+        const n = _v.set(t.nozzle[0], t.nozzle[1], t.nozzle[2]);
+        flame.quaternion.setFromUnitVectors(_up, n);
+        flame.position.set(t.x + 0.5 + n.x * 0.5, t.y + 0.5 + n.y * 0.5, t.z + 0.5 + n.z * 0.5);
+        this.group.add(flame);
+        this.flames.set(key, flame);
+      }
+      const f = 0.85 + Math.random() * 0.3;
+      flame.scale.set(f, 0.9 + Math.random() * 0.5, f);
+    }
   }
 
   // ---------- lifecycle ----------
@@ -510,6 +581,10 @@ export class Ship extends VoxelGrid {
       quaternion: this.quaternion.toArray(),
       velocity: this.velocity.toArray(),
       angularVelocity: this.angularVelocity.toArray(),
+      consoles: [...this.consoles].filter(([key]) => {
+        const [x, y, z] = key.split(',').map(Number);
+        return BLOCKS[this.getBlock(x, y, z)].console;
+      }),
     };
   }
 
@@ -526,6 +601,7 @@ export class Ship extends VoxelGrid {
     ship.quaternion.fromArray(data.quaternion);
     ship.velocity.fromArray(data.velocity);
     ship.angularVelocity.fromArray(data.angularVelocity);
+    for (const [key, bindings] of data.consoles ?? []) ship.consoles.set(key, bindings);
     ship.syncTransform();
     ship.remeshAll();
     return ship;

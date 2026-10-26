@@ -33,7 +33,10 @@ Any static file server works (`npx serve`, VS Code Live Server, GitHub Pages, â€
 - Buoyancy: every block type has a density (hull 0.5, wood 0.6, stone 2.4, ...). Ships lighter than water float
   at a matching waterline and right themselves when tilted; heavier ones sink
 - Gravity in any of the six axis directions, with the player smoothly reorienting to the new "down"
-- Ships: free-moving block grids you can stand on, walk around, pilot, and rebuild while they move.
+- Ships: free-moving block grids you can stand on, walk around, fly, and rebuild while they move.
+- Thrusters push their ship away from their nozzle, from where they're mounted (so off-centre ones turn it).
+  A navigation console maps them to W/A/S/D: drag thrusters from its list onto the key boxes, take the helm,
+  and holding a key fires everything bound to it
   You ride along with a ship exactly (no sliding off), and neither you nor other ships can pass through it
 - Mining (hold to break, with crack stages), placing, and picking blocks, with a 9-slot hotbar and a block inventory
 - Ship hull: metal blocks in six shapes (full block, half block, plate, 45Â° slope, and a two-piece 26.6Â° slope)
@@ -52,11 +55,9 @@ Any static file server works (`npx serve`, VS Code Live Server, GitHub Pages, â€
 | F | Toggle flying |
 | T / Shift+T | Rotate the shaped block you're looking at / move its base to the next face (for gravity plates and slopes: change which way they pull) |
 | WASD / Space / Shift (zero-g) | Jetpack |
-| N | Spawn a small ship deck in front of you |
-| R | Take / leave the controls of the ship you're on |
-| WASD / Space / Shift (piloting) | Thrust forward/back/sideways/up/down, relative to where you face |
-| Q / E (piloting) | Turn the ship |
-| X (piloting) | Brake |
+| N | Spawn a starter ship (console + four thrusters, already mapped) |
+| R | Open the navigation console you're looking at / leave the helm |
+| W / A / S / D (at the helm) | Fire the thrusters bound to that key |
 | Left click (hold) | Mine block |
 | Right click | Place block |
 | Middle click | Pick block into hotbar |
@@ -72,7 +73,8 @@ Any static file server works (`npx serve`, VS Code Live Server, GitHub Pages, â€
 | `src/main.js` | Renderer, input, block interaction, sky, game loop, saving |
 | `src/grid.js` | Voxel grid base class: cubic chunk storage, meshing, editing, raycasting |
 | `src/world.js` | The static world: terrain generation, chunk streaming, saved edits |
-| `src/ship.js` | Ships: moving grids with position, rotation, velocity, and collision |
+| `src/ship.js` | Ships: rigid-body grids with gravity, buoyancy, collisions, and thrusters |
+| `src/console.js` | The navigation console screen (thruster-to-key mapping) |
 | `src/gravity.js` | The gravity field from generator blocks and the terrain |
 | `src/player.js` | First-person movement, collision, gravity frame, zero-g, and riding ships |
 | `src/blocks.js` | Block definitions (hardness, shape, permanent damage) |

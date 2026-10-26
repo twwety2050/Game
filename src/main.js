@@ -4,7 +4,8 @@ import { B, BLOCKS, HOTBAR, T } from './blocks.js';
 import { World, CS } from './world.js';
 import { VoxelGrid, crackStage } from './grid.js';
 import { SHAPE, rotationFor, applyRotation, DIRS } from './shapes.js';
-import { Ship } from './ship.js';
+import { Ship, CONTROL_KEYS } from './ship.js';
+import { NavConsoleUI } from './console.js';
 import { Player } from './player.js';
 import { Hud } from './hud.js';
 
@@ -12,9 +13,6 @@ const SAVE_KEY = 'voxelcraft-save-v2';
 const REACH = 6;
 const DAY_LENGTH = 600; // seconds for a full day/night cycle
 const RENDER_DISTANCE = 3; // in chunks, on every axis
-const SHIP_ACCEL = 12;     // blocks/s^2 of thrust while piloting
-const SHIP_MAX_SPEED = 40;
-const SHIP_TURN_RATE = 0.8; // radians/s
 
 let save = null;
 try { save = JSON.parse(localStorage.getItem(SAVE_KEY)); } catch { save = null; }
@@ -152,26 +150,89 @@ addEventListener('beforeunload', persist);
 // ---------- input ----------
 
 const menu = document.getElementById('menu');
-const inventory = document.getElementById('inventory');
 const canvas = renderer.domElement;
 let locked = false;
-let inventoryOpen = false;
 
-function openInventory() {
-  inventoryOpen = true;
-  document.exitPointerLock();
+// Screens that free the mouse without pausing: the inventory and the navigation console.
+const overlays = {
+  inventory: { el: document.getElementById('inventory'), close: () => {} },
+  console: { el: document.getElementById('console'), close: () => navConsole.close() },
+};
+let overlay = null; // name of the open overlay, if any
+
+function openOverlay(name) {
+  overlay = name;
+  if (locked) document.exitPointerLock();
+  else showOverlays();
 }
 
-function closeInventory() {
-  inventoryOpen = false;
-  inventory.classList.add('hidden');
-  lock();
+// Close the overlay and go back to playing (or to the pause menu).
+function closeOverlay(toMenu = false) {
+  if (!overlay) return;
+  overlays[overlay].close();
+  overlay = null;
+  showOverlays();
+  if (toMenu) menu.classList.remove('hidden');
+  else lock();
+}
+
+function showOverlays() {
+  for (const [name, o] of Object.entries(overlays)) o.el.classList.toggle('hidden', locked || overlay !== name);
+  menu.classList.toggle('hidden', locked || overlay !== null);
 }
 
 hud.buildInventory((id) => {
   hud.setItem(id);
-  closeInventory();
+  closeOverlay();
 });
+
+// The helm: which console the player is flying from (null when not piloting).
+let helm = null;
+
+const navConsole = new NavConsoleUI(hud.icons, B.THRUSTER, {
+  onPilot: () => {
+    helm = { ship: navConsole.ship, key: navConsole.consoleKey };
+    player.piloting = true;
+    closeOverlay();
+    hud.toast('At the helm');
+  },
+  onClose: () => closeOverlay(),
+  onHover: (key) => {
+    thrusterMarker.visible = !!key;
+    if (key) markThruster(navConsole.ship, key);
+  },
+});
+
+// Outline a ship's thruster in the world (while hovering it on the console screen).
+const thrusterMarker = new THREE.LineSegments(
+  new THREE.EdgesGeometry(new THREE.BoxGeometry(1.1, 1.1, 1.1)),
+  new THREE.LineBasicMaterial({ color: 0xffa040, depthTest: false }),
+);
+thrusterMarker.renderOrder = 10;
+thrusterMarker.visible = false;
+scene.add(thrusterMarker);
+function markThruster(ship, key) {
+  const t = ship.thrusters.get(key);
+  if (!t) return;
+  ship.localToWorld(tmpA.set(t.x + 0.5, t.y + 0.5, t.z + 0.5), thrusterMarker.position);
+  thrusterMarker.quaternion.copy(ship.quaternion);
+}
+
+function leaveHelm() {
+  helm = null;
+  player.piloting = false;
+}
+
+function useConsole() {
+  if (player.piloting) { leaveHelm(); hud.toast('Left the helm'); return; }
+  if (!target || !BLOCKS[target.id].console) { hud.toast('Look at a navigation console to use it'); return; }
+  if (!(target.grid instanceof Ship)) { hud.toast('This console isn\'t on a ship'); return; }
+  if (player.ref !== target.grid) { hud.toast('Board the ship to use its console'); return; }
+  const key = `${target.x},${target.y},${target.z}`;
+  navConsole.consoleKey = key;
+  navConsole.open(target.grid, key, target.grid.getMeta(target.x, target.y, target.z));
+  openOverlay('console');
+}
 
 const lock = () => canvas.requestPointerLock();
 document.getElementById('play').addEventListener('click', lock);
@@ -185,8 +246,7 @@ canvas.addEventListener('click', () => { if (!locked) lock(); });
 
 document.addEventListener('pointerlockchange', () => {
   locked = document.pointerLockElement === canvas;
-  inventory.classList.toggle('hidden', locked || !inventoryOpen);
-  menu.classList.toggle('hidden', locked || inventoryOpen);
+  showOverlays();
   if (!locked) { held.clear(); persist(); }
 });
 
@@ -205,17 +265,16 @@ document.addEventListener('contextmenu', (e) => e.preventDefault());
 document.addEventListener('wheel', (e) => { if (locked) hud.scroll(Math.sign(e.deltaY)); }, { passive: true });
 
 addEventListener('keydown', (e) => {
-  if (e.code === 'KeyE' && !e.repeat) {
-    if (inventoryOpen) closeInventory();
-    else if (locked) openInventory();
+  if (e.code === 'KeyE' && !e.repeat && overlay !== 'console') {
+    if (overlay === 'inventory') closeOverlay();
+    else if (locked) openOverlay('inventory');
     return;
   }
-  if (e.code === 'Escape' && inventoryOpen) {
-    inventoryOpen = false;
-    inventory.classList.add('hidden');
-    menu.classList.remove('hidden');
+  if (e.code === 'Escape' && overlay) {
+    closeOverlay(true);
     return;
   }
+  if (overlay) return;
   if (e.code.startsWith('Digit')) {
     const n = Number(e.code.slice(5));
     if (n >= 1 && n <= 9) hud.select(n - 1);
@@ -225,13 +284,8 @@ addEventListener('keydown', (e) => {
     rotateTarget(e.shiftKey);
   } else if (e.code === 'KeyN' && locked) {
     spawnShip();
-  } else if (e.code === 'KeyR' && locked) {
-    if (player.ref) {
-      player.piloting = !player.piloting;
-      hud.toast(player.piloting ? 'Piloting' : 'Left the controls');
-    } else {
-      hud.toast('Stand on a ship to pilot it');
-    }
+  } else if (e.code === 'KeyR' && locked && !e.repeat) {
+    useConsole();
   } else if (e.code === 'F3') {
     e.preventDefault();
     showDebug = !showDebug;
@@ -372,6 +426,15 @@ function spawnShip() {
   // A sloped bow so you can tell which way is forward.
   const bow = rotationFor([0, -1, 0], [0, 0, -1]);
   for (let x = -2; x <= 2; x++) ship.setBlock(x, 0, -4, B.HULL_SLOPE, { meta: bow, remesh: false });
+  // A console at the stern facing aft (stand behind it to fly), a main engine on the stern,
+  // a reverse thruster at the bow, and two side thrusters at the bow for steering.
+  ship.setBlock(0, 1, 2, B.NAV_CONSOLE, { meta: rotationFor([0, -1, 0], [0, 0, 1]), remesh: false });
+  const thruster = (x, y, z, base) => ship.setBlock(x, y, z, B.THRUSTER, { meta: rotationFor(base, base[1] ? [0, 0, 1] : [0, 1, 0]), remesh: false });
+  thruster(0, 0, 4, [0, 0, -1]);  // nozzle aft: pushes forward
+  thruster(0, 1, -3, [0, 0, 1]);  // nozzle forward: pushes back
+  thruster(3, 0, -3, [-1, 0, 0]); // nozzle starboard: swings the bow to port
+  thruster(-3, 0, -3, [1, 0, 0]); // nozzle port: swings the bow to starboard
+  Object.assign(ship.consoleBindings('0,1,2'), { W: ['0,0,4'], S: ['0,1,-3'], A: ['3,0,-3'], D: ['-3,0,-3'] });
 
   const forward = tmpA, right = tmpB;
   player.moveBasis(forward, right);
@@ -402,41 +465,19 @@ function removeShip(ship) {
   ships.splice(ships.indexOf(ship), 1);
 }
 
-const thrust = new THREE.Vector3();
-const spin = new THREE.Vector3();
-
-// Fly the ship the player is standing on. Thrust follows the player's view; with no input
-// the inertial dampeners bring it to rest, and while piloted the thrusters hold it against
-// gravity. Leave the controls and it keeps drifting (or falls, if something is pulling it).
-function pilotShip(dt) {
-  const ship = player.ref;
-  if (!ship) { player.piloting = false; return; }
-  if (!player.piloting) return;
-  const k = player.keys;
-  const forward = tmpA, right = tmpB;
-  player.moveBasis(forward, right);
-  thrust.set(0, 0, 0);
-  if (k.has('KeyW')) thrust.add(forward);
-  if (k.has('KeyS')) thrust.sub(forward);
-  if (k.has('KeyD')) thrust.add(right);
-  if (k.has('KeyA')) thrust.sub(right);
-  if (k.has('Space')) thrust.add(player.up);
-  if (k.has('ShiftLeft') || k.has('ShiftRight')) thrust.sub(player.up);
-
-  if (k.has('KeyX')) {
-    ship.velocity.multiplyScalar(Math.exp(-6 * dt));
-  } else if (thrust.lengthSq() > 0) {
-    ship.velocity.addScaledVector(ship.dirToWorld(thrust.normalize(), thrust), SHIP_ACCEL * dt);
-  } else {
-    ship.velocity.multiplyScalar(Math.exp(-1.5 * dt));
+// At the helm, each held key fires the thrusters bound to it on the console.
+function fireThrusters() {
+  for (const ship of ships) ship.firing.clear();
+  if (!player.piloting || !helm || player.ref !== helm.ship || !ships.includes(helm.ship)) {
+    if (helm) leaveHelm();
+    return;
   }
-  if (ship.velocity.length() > SHIP_MAX_SPEED) ship.velocity.setLength(SHIP_MAX_SPEED);
-  if (ship.velocity.lengthSq() < 1e-4 && thrust.lengthSq() === 0) ship.velocity.set(0, 0, 0);
-
-  const turn = (k.has('KeyQ') ? 1 : 0) - (k.has('KeyE') ? 1 : 0);
-  ship.dirToWorld(player.up, spin).multiplyScalar(turn * SHIP_TURN_RATE);
-  ship.angularVelocity.lerp(spin, Math.min(1, 4 * dt));
-  if (!turn && ship.angularVelocity.lengthSq() < 1e-6) ship.angularVelocity.set(0, 0, 0);
+  const [x, y, z] = helm.key.split(',').map(Number);
+  if (!BLOCKS[helm.ship.getBlock(x, y, z)].console) { leaveHelm(); hud.toast('The console was destroyed'); return; }
+  const bindings = helm.ship.consoleBindings(helm.key);
+  for (const key of CONTROL_KEYS) {
+    if (player.keys.has('Key' + key)) for (const t of bindings[key]) helm.ship.firing.add(t);
+  }
 }
 
 // ---------- sky ----------
@@ -494,13 +535,14 @@ function frame(now) {
   world.update(wp.x, wp.y, wp.z, 8);
 
   if (locked) {
-    pilotShip(dt);
+    fireThrusters();
     for (const ship of ships) {
       ship.piloted = player.piloting && player.ref === ship;
       const impact = ship.update(dt, world, ships);
       if (impact > 4 && ship === player.ref) hud.toast('Collision!');
     }
   }
+  for (const ship of ships) ship.updateFlames();
 
   // Hold physics until the chunk under the player exists, so we never fall through the world.
   if (locked && (player.ref || world.getChunkAt(wp.x, wp.y, wp.z))) player.update(dt);
@@ -554,14 +596,14 @@ function updateStatus() {
     else if (player.gravityStrength < 0.97 && !player.flying) text = `Gravity ${Math.round(player.gravityStrength * 100)}%`;
   }
   if (ship && player.piloting) {
-    text = `PILOTING  ${ship.velocity.length().toFixed(1)} m/s  ·  WASD / Space / Shift thrust  ·  Q/E turn  ·  X brake  ·  R leave controls`;
+    text = `AT THE HELM  ${ship.velocity.length().toFixed(1)} m/s  ·  W A S D fire thrusters  ·  R leave the helm`;
   } else if (ship) {
     const drift = ship.velocity.length();
-    text = `Aboard ship${drift > 0.05 ? ` (drifting ${drift.toFixed(1)} m/s)` : ''}  ·  R to pilot${text ? `  ·  ${text}` : ''}`;
+    text = `Aboard ship${drift > 0.05 ? ` (drifting ${drift.toFixed(1)} m/s)` : ''}  ·  R at a navigation console to fly${text ? `  ·  ${text}` : ''}`;
   }
   if (statusEl.textContent !== text) statusEl.textContent = text;
   statusEl.classList.toggle('hidden', !text);
 }
 
 // Exposed for debugging from the browser console.
-window.game = { world, ships, player, hud, camera, renderer, spawnShip, removeShip, pilotShip };
+window.game = { world, ships, player, hud, camera, renderer, spawnShip, removeShip, navConsole, useConsole, fireThrusters, getHelm: () => helm, setTarget: (t) => { target = t; } };

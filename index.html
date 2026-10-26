@@ -27,6 +27,30 @@
     </div>
   </div>
 
+  <div id="console" class="hidden">
+    <div class="panel console-panel">
+      <h2>Navigation Console</h2>
+      <div class="console-layout">
+        <section class="available">
+          <h3>Available thrusters</h3>
+          <div class="tiles"></div>
+        </section>
+        <section class="keys">
+          <div class="keybox key-w" data-key="W"><span class="keycap">W</span><div class="chips"></div></div>
+          <div class="keybox key-a" data-key="A"><span class="keycap">A</span><div class="chips"></div></div>
+          <div class="keybox key-s" data-key="S"><span class="keycap">S</span><div class="chips"></div></div>
+          <div class="keybox key-d" data-key="D"><span class="keycap">D</span><div class="chips"></div></div>
+        </section>
+      </div>
+      <p class="note">Drag thrusters onto a key: holding that key at the helm fires them. Click a thruster in a key box
+        (or drag it back to the list) to remove it. Directions are as seen from the helm, facing the screen.</p>
+      <div class="console-buttons">
+        <button id="console-pilot">Take the helm</button>
+        <button id="console-close" class="secondary">Close</button>
+      </div>
+    </div>
+  </div>
+
   <div id="menu">
     <div class="panel">
       <h1>VoxelCraft</h1>
@@ -38,8 +62,8 @@
         <tr><td>Shift</td><td>Sprint / fly down</td></tr>
         <tr><td>F</td><td>Toggle flying</td></tr>
         <tr><td>T / Shift+T</td><td>Rotate block / change its base (gravity: pull direction)</td></tr>
-        <tr><td>N</td><td>Spawn a ship deck</td></tr>
-        <tr><td>R</td><td>Pilot the ship you're on</td></tr>
+        <tr><td>N</td><td>Spawn a starter ship</td></tr>
+        <tr><td>R</td><td>Use a navigation console / leave the helm</td></tr>
         <tr><td>Left click (hold)</td><td>Mine block</td></tr>
         <tr><td>Right click</td><td>Place block</td></tr>
         <tr><td>Middle click</td><td>Pick block</td></tr>

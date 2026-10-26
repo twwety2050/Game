@@ -4,7 +4,7 @@
 // sloped shapes rise toward -Z (their low edge faces +Z). A block's `meta` byte picks one of
 // 24 rotations, which maps canonical "down" and "front" (+Z) to any pair of perpendicular axes.
 
-export const SHAPE = { FULL: 0, SLAB: 1, PLATE: 2, SLOPE: 3, SLOPE_LOW: 4, SLOPE_HIGH: 5 };
+export const SHAPE = { FULL: 0, SLAB: 1, PLATE: 2, SLOPE: 3, SLOPE_LOW: 4, SLOPE_HIGH: 5, THRUSTER: 6, CONSOLE: 7 };
 
 // Face/direction indices, matching the face order used by the mesher: -X +X -Y +Y -Z +Z.
 export const DIRS = [[-1, 0, 0], [1, 0, 0], [0, -1, 0], [0, 1, 0], [0, 0, -1], [0, 0, 1]];
@@ -74,6 +74,22 @@ function wedge(hb, hf) {
   return polys;
 }
 
+// Give every polygon of `polys` the texture role `role` (top/side/bottom), except those whose
+// canonical normal points straight up, which get `topRole`.
+const withRoles = (polys, role, topRole = role) =>
+  polys.map((p) => ({ ...p, role: p.normal[1] > 0.99 ? topRole : role }));
+
+// A thruster: a mounting plate, an engine body, and a nozzle facing +Y (away from the surface
+// it's mounted on). Faces hidden inside the block are left out.
+function thrusterPolys() {
+  const notBottom = (polys) => polys.filter((p) => p.normal[1] > -0.5);
+  return [
+    ...withRoles(box(0, 0, 0, 1, 0.2, 1), 'bottom'),
+    ...withRoles(notBottom(box(0.15, 0.2, 0.15, 0.85, 0.65, 0.85)), 'side', 'bottom'),
+    ...withRoles(notBottom(box(0.22, 0.65, 0.22, 0.78, 1, 0.78)), 'side', 'top'),
+  ];
+}
+
 // Collision approximation of a wedge: columns along z, each as tall as the slope at its high
 // edge. The player's step-up lets them walk up these smoothly.
 function wedgeBoxes(hb, hf, columns = 4) {
@@ -92,6 +108,14 @@ const DEFS = {
   [SHAPE.SLOPE]: { polys: wedge(1, 0), boxes: wedgeBoxes(1, 0), full: (1 << 2) | (1 << 4), volume: 0.5 },
   [SHAPE.SLOPE_LOW]: { polys: wedge(0.5, 0), boxes: wedgeBoxes(0.5, 0, 2), full: 1 << 2, volume: 0.25 },
   [SHAPE.SLOPE_HIGH]: { polys: wedge(1, 0.5), boxes: wedgeBoxes(1, 0.5, 2), full: (1 << 2) | (1 << 4), volume: 0.75 },
+  [SHAPE.THRUSTER]: {
+    polys: thrusterPolys(),
+    boxes: [[0, 0, 0, 1, 0.2, 1], [0.15, 0.2, 0.15, 0.85, 0.65, 0.85], [0.22, 0.65, 0.22, 0.78, 1, 0.78]],
+    full: 1 << 2,
+    volume: 0.53,
+  },
+  // A desk whose slanted top (the screen) faces +Z, toward whoever placed it.
+  [SHAPE.CONSOLE]: { polys: wedge(1, 0.55), boxes: wedgeBoxes(1, 0.55, 2), full: (1 << 2) | (1 << 4), volume: 0.78 },
 };
 
 // Fraction of the cell a shape fills.
@@ -117,7 +141,7 @@ function buildVariant(def, m) {
     if (dot(n, normal) < 0) for (const t of tris) t.reverse();
     const cull = p.cull < 0 ? -1 : dirIndex(...rotate(m, ...DIRS[p.cull]));
     // Which of the block's textures this polygon uses, from its canonical (unrotated) normal.
-    const role = p.normal[1] > 0.3 ? 'top' : p.normal[1] < -0.3 ? 'bottom' : 'side';
+    const role = p.role ?? (p.normal[1] > 0.3 ? 'top' : p.normal[1] < -0.3 ? 'bottom' : 'side');
     // Same lighting model as cube faces: blend face shades by the normal's components.
     const shade = 0.75 * normal[0] ** 2 + 0.88 * normal[2] ** 2 + (normal[1] > 0 ? 1.0 : 0.55) * normal[1] ** 2;
     return { verts, normal, tris, cull, shade, role };

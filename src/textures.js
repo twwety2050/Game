@@ -152,6 +152,42 @@ export function createAtlas() {
     put(T.GRAVITY_SIDE, x, y, side);
   });
 
+  // Thruster body: steel with dark vents and a hazard band.
+  each((x, y) => {
+    let c = vary([140, 146, 156], 0.04);
+    if (y >= 12) c = (x + y) % 6 < 3 ? [222, 150, 40] : [40, 40, 44];   // hazard stripes
+    else if (y % 4 === 1 && x > 2 && x < 13) c = [52, 56, 64];           // vents
+    if (x === 0 || x === TILE - 1) c = [96, 100, 110];
+    put(T.THRUSTER_SIDE, x, y, c);
+  });
+  // Nozzle: dark concentric rings around a white-hot core.
+  each((x, y) => {
+    const r = Math.hypot(x - 7.5, y - 7.5);
+    let c = [44, 46, 52];
+    if (r < 2) c = [255, 240, 200];
+    else if (r < 3.5) c = [255, 160, 60];
+    else if (r < 5) c = [120, 50, 20];
+    else if (Math.floor(r) % 2) c = [70, 72, 80];
+    put(T.THRUSTER_NOZZLE, x, y, vary(c, 0.03));
+  });
+  // Console screen: a dark display with a bezel, a radar ring, and readout lines.
+  each((x, y) => {
+    let c = [16, 26, 40];
+    const r = Math.hypot(x - 5, y - 6);
+    if (x === 0 || y === 0 || x === TILE - 1 || y === TILE - 1) c = [70, 76, 88];
+    else if (Math.abs(r - 3.2) < 0.6 || (r < 3.5 && (x === 5 || y === 6))) c = [60, 220, 170];
+    else if (x >= 10 && x <= 13 && y % 3 === 2) c = [90, 180, 255];
+    else if (y === 12 && x > 1 && x < 9) c = [255, 190, 70];
+    put(T.CONSOLE_SCREEN, x, y, c);
+  });
+  each((x, y) => {
+    let c = vary([58, 62, 72], 0.04);
+    if (x === 0 || y === 0) c = [92, 98, 110];
+    else if (x === TILE - 1 || y === TILE - 1) c = [34, 36, 42];
+    else if (y === 5 && x > 3 && x < 12) c = [60, 220, 170];
+    put(T.CONSOLE_SIDE, x, y, c);
+  });
+
   // Crack overlays: one random crack pattern revealed progressively over the stages.
   const segments = [];
   for (let k = 0; k < 6; k++) {
