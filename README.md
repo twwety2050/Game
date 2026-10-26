@@ -15,7 +15,9 @@ Any static file server works (`npx serve`, VS Code Live Server, GitHub Pages, �
 
 ## Features
 
-- Infinite, seeded terrain streamed in 16×16×96 chunks: plains, beaches, oceans, forests, snowy mountains
+- A world that is infinite on all three axes, streamed in cubic 32×32×32 chunks; you can build anywhere,
+  including in the empty space above and below the terrain
+- Seeded terrain (for now, a layer between y = 0 and 96): plains, beaches, oceans, forests, snowy mountains
 - Caves, coal and iron ore, bedrock floor
 - Procedurally painted pixel-art textures (no image files)
 - Face-culled chunk meshes with smooth ambient occlusion
@@ -48,7 +50,7 @@ Any static file server works (`npx serve`, VS Code Live Server, GitHub Pages, �
 | File | Purpose |
 | --- | --- |
 | `src/main.js` | Renderer, input, block interaction, sky, game loop, saving |
-| `src/world.js` | Chunk storage, terrain generation, meshing, raycasting |
+| `src/world.js` | Cubic chunk storage and streaming, terrain generation, meshing, raycasting |
 | `src/player.js` | First-person movement, collision, and the gravity frame |
 | `src/blocks.js` | Block definitions |
 | `src/textures.js` | Procedural texture atlas |

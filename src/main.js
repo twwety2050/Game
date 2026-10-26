@@ -1,14 +1,14 @@
 import * as THREE from 'three';
 import { createAtlas } from './textures.js';
 import { B, BLOCKS, HOTBAR } from './blocks.js';
-import { World, CH } from './world.js';
+import { World, CS } from './world.js';
 import { Player } from './player.js';
 import { Hud } from './hud.js';
 
-const SAVE_KEY = 'voxelcraft-save-v1';
+const SAVE_KEY = 'voxelcraft-save-v2';
 const REACH = 6;
 const DAY_LENGTH = 600; // seconds for a full day/night cycle
-const RENDER_DISTANCE = 6;
+const RENDER_DISTANCE = 3; // in chunks, on every axis
 
 let save = null;
 try { save = JSON.parse(localStorage.getItem(SAVE_KEY)); } catch { save = null; }
@@ -37,7 +37,7 @@ const waterMat = new THREE.MeshBasicMaterial({
   map: texture, vertexColors: true, transparent: true, opacity: 0.72, depthWrite: false, side: THREE.DoubleSide,
 });
 
-const fogFar = RENDER_DISTANCE * 16;
+const fogFar = RENDER_DISTANCE * CS;
 scene.fog = new THREE.Fog(0x87ceeb, fogFar * 0.55, fogFar);
 scene.background = new THREE.Color(0x87ceeb);
 
@@ -149,7 +149,6 @@ function act(button) {
     if (BLOCKS[target.id].breakable) world.setBlock(target.x, target.y, target.z, B.AIR);
   } else if (button === 2) {
     const x = target.x + target.nx, y = target.y + target.ny, z = target.z + target.nz;
-    if (y < 0 || y >= CH) return;
     const existing = world.getBlock(x, y, z);
     if (existing !== B.AIR && !BLOCKS[existing].liquid) return;
     if (BLOCKS[hud.current].solid && player.intersectsBlock(x, y, z)) return;
@@ -210,10 +209,10 @@ function frame(now) {
   const dt = Math.min((now - last) / 1000, 0.1);
   last = now;
 
-  world.update(player.pos.x, player.pos.z, 8);
+  world.update(player.pos.x, player.pos.y, player.pos.z, 8);
 
   // Hold physics until the chunk under the player exists, so we never fall through the world.
-  if (locked && world.getChunkAt(player.pos.x, player.pos.z)) player.update(dt);
+  if (locked && world.getChunkAt(player.pos.x, player.pos.y, player.pos.z)) player.update(dt);
   else player.syncCamera();
 
   camera.getWorldDirection(tmpDir);
@@ -237,7 +236,7 @@ function frame(now) {
     hud.setDebug([
       `VoxelCraft  ${fps} fps`,
       `XYZ: ${p.x.toFixed(2)} / ${p.y.toFixed(2)} / ${p.z.toFixed(2)}`,
-      `Chunk: ${Math.floor(p.x / 16)}, ${Math.floor(p.z / 16)}   loaded: ${world.chunks.size}`,
+      `Chunk: ${Math.floor(p.x / CS)}, ${Math.floor(p.y / CS)}, ${Math.floor(p.z / CS)}   loaded: ${world.chunks.size}`,
       `Facing: ${target ? `${BLOCKS[target.id].name} @ ${target.x} ${target.y} ${target.z}` : '-'}`,
       `Mode: ${player.flying ? 'flying' : player.inWater ? 'swimming' : 'walking'}   gravity: ${player.gravityLabel()}   seed: ${seed}`,
       `Draw calls: ${renderer.info.render.calls}  tris: ${renderer.info.render.triangles}`,

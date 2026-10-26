@@ -6,7 +6,7 @@
 // view rotates smoothly into the new frame.
 import * as THREE from 'three';
 import { BLOCKS } from './blocks.js';
-import { CH } from './world.js';
+import { TERRAIN_HEIGHT } from './world.js';
 
 const HALF = 0.3;      // half the player's width
 const HEIGHT = 1.8;
@@ -18,6 +18,7 @@ const WALK = 4.3;
 const SPRINT = 6.2;
 const FLY = 11;
 const TURN_TIME = 0.45; // seconds to reorient after gravity changes
+const FALL_RESCUE_TIME = 10; // seconds of nonstop falling before being dropped back onto terrain
 
 const AXES = ['x', 'y', 'z'];
 const AXIS_NAMES = ['X', 'Y', 'Z'];
@@ -40,6 +41,7 @@ export class Player {
     this.flying = false;
     this.inWater = false;
     this.headInWater = false;
+    this.fallTime = 0;
     this.keys = new Set();
 
     // Gravity frame, as exact unit axis vectors in world space.
@@ -282,10 +284,13 @@ export class Player {
     }
     if (this.onGround && this.flying && !k.has('Space')) this.flying = false;
 
-    // Fell out of the world (gravity can point anywhere): drop back in from the sky.
-    if (this.pos.y < -20 || this.pos.y > CH + 64) {
+    // Falling endlessly through empty space (gravity can point anywhere): drop back in from
+    // the sky above the terrain.
+    this.fallTime = this.onGround || this.flying || this.inWater ? 0 : this.fallTime + dt;
+    if (this.fallTime > FALL_RESCUE_TIME) {
+      this.fallTime = 0;
       this.setUp(new THREE.Vector3(0, 1, 0), { instant: true });
-      this.pos.y = CH;
+      this.pos.y = TERRAIN_HEIGHT;
       this.vel.set(0, 0, 0);
     }
 
