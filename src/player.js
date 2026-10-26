@@ -18,6 +18,7 @@ import * as THREE from 'three';
 import { BLOCKS } from './blocks.js';
 import { SOLID, blockBoxes } from './grid.js';
 import { TERRAIN_HEIGHT } from './world.js';
+import { gravityAt } from './gravity.js';
 
 const HALF = 0.3;      // half the player's width (and the capsule radius)
 const HEIGHT = 1.8;
@@ -33,6 +34,10 @@ const FALL_RESCUE_TIME = 10;  // seconds of nonstop falling before being dropped
 const SPHERES = [HALF, HEIGHT / 2, HEIGHT - HALF]; // capsule sphere heights above the feet
 const SHIP_EXIT_MARGIN = 1.5; // how far outside a ship's bounds you can drift before leaving it
 const STEP_HEIGHT = 0.55;     // ledges up to this high (slabs, slopes) are walked up automatically
+const ZERO_G = 0.03;          // gravity strength below which you float freely
+const JET_ACCEL = 6;          // zero-g jetpack thrust, blocks/s^2
+const JET_MAX_SPEED = 9;
+const REORIENT_BIAS = 1.2;    // a new "down" must be this much stronger than the current one
 
 const AXES = ['x', 'y', 'z'];
 const AXIS_NAMES = ['X', 'Y', 'Z'];
@@ -72,6 +77,8 @@ export class Player {
     this.headInWater = false;
     this.fallTime = 0;
     this.stepOffset = 0; // eye lag after stepping up, smoothed away over a few frames
+    this.gravity = new THREE.Vector3(); // current pull, grid-local; length is strength in [0, 1]
+    this.gravityStrength = 1;
     this.keys = new Set();
 
     // Gravity frame, as exact unit axis vectors in the reference grid's coordinates.
@@ -117,6 +124,23 @@ export class Player {
       up: this.up.toArray(), right: this.right.toArray(),
       ship: this.ref ? this.ships.indexOf(this.ref) : null,
     };
+  }
+
+  get zeroG() { return this.gravityStrength < ZERO_G && !this.flying; }
+
+  // Sample the gravity field at the body's centre and turn to face its "down" when a
+  // different axis clearly dominates.
+  senseGravity() {
+    const centre = _c.copy(this.pos).addScaledVector(this.up, HEIGHT / 2);
+    this.grid.localToWorld(centre, centre);
+    gravityAt(centre, this.world, this.ships, _d);
+    this.grid.dirToLocal(_d, this.gravity);
+    this.gravityStrength = this.gravity.length();
+    if (this.gravityStrength < ZERO_G || this.flying || this.turn) return;
+    const want = nearestAxis(_c.copy(this.gravity).negate());
+    if (want.equals(this.up)) return;
+    const pullWant = -this.gravity.dot(want), pullNow = -this.gravity.dot(this.up);
+    if (pullWant > pullNow * REORIENT_BIAS + 0.02) this.setUp(want);
   }
 
   get upAxis() { return Math.abs(this.up.x) ? 0 : Math.abs(this.up.y) ? 1 : 2; }
@@ -433,14 +457,48 @@ export class Player {
   // ---------- simulation ----------
 
   update(dt) {
-    const k = this.keys;
     const grid = this.grid;
-    const up = this.up;
 
+    this.senseGravity();
+    const up = this.up;
     _v.copy(this.pos).addScaledVector(up, 0.4).floor();
     this.inWater = BLOCKS[grid.getBlock(_v.x, _v.y, _v.z)].liquid;
     _v.copy(this.pos).addScaledVector(up, EYE).floor();
     this.headInWater = BLOCKS[grid.getBlock(_v.x, _v.y, _v.z)].liquid;
+
+    if (this.zeroG && !this.inWater) this.jetpack(dt);
+    else this.walk(dt);
+
+    this.collideAndMove(dt);
+    this.syncCamera(dt);
+  }
+
+  // Free-floating movement: thrust along the view direction; momentum carries you.
+  jetpack(dt) {
+    const k = this.keys;
+    const view = this.viewQuaternion(_q1);
+    const thrust = _a.set(0, 0, 0);
+    if (!this.piloting) {
+      if (k.has('KeyW')) thrust.z -= 1;
+      if (k.has('KeyS')) thrust.z += 1;
+      if (k.has('KeyA')) thrust.x -= 1;
+      if (k.has('KeyD')) thrust.x += 1;
+      if (k.has('Space')) thrust.y += 1;
+      if (k.has('ShiftLeft') || k.has('ShiftRight')) thrust.y -= 1;
+    }
+    if (thrust.lengthSq() > 0) {
+      this.vel.addScaledVector(thrust.normalize().applyQuaternion(view), JET_ACCEL * dt);
+      if (this.vel.length() > JET_MAX_SPEED) this.vel.setLength(JET_MAX_SPEED);
+    } else {
+      this.vel.multiplyScalar(Math.exp(-0.3 * dt)); // gentle suit stabilisers
+    }
+  }
+
+  // Walking, swimming, and flying in the gravity frame.
+  walk(dt) {
+    const k = this.keys;
+    const up = this.up;
+    const g = Math.min(1, this.gravityStrength);
 
     // Work in the gravity frame: x = right, y = up, z = back.
     let vx = this.vel.dot(this.right), vy = this.vel.dot(up), vz = this.vel.dot(this.back);
@@ -476,11 +534,11 @@ export class Player {
       if (sprint) target -= FLY;
       vy += (target - vy) * Math.min(1, 10 * dt);
     } else if (this.inWater) {
-      vy -= GRAVITY * 0.25 * dt;
+      vy -= GRAVITY * 0.25 * g * dt;
       if (jump) vy = Math.min(vy + 30 * dt, 3.5);
       vy = Math.max(vy, -3);
     } else {
-      vy -= GRAVITY * dt;
+      vy -= GRAVITY * g * dt;
       if (jump && this.onGround) vy = JUMP;
       vy = Math.max(vy, -60);
     }
@@ -489,6 +547,10 @@ export class Player {
       .addScaledVector(this.right, vx)
       .addScaledVector(up, vy)
       .addScaledVector(this.back, vz);
+  }
+
+  collideAndMove(dt) {
+    const jump = !this.piloting && this.keys.has('Space');
 
     // Sub-step so fast movement never tunnels through a block. Resolve the gravity axis first.
     const maxMove = Math.max(Math.abs(this.vel.x), Math.abs(this.vel.y), Math.abs(this.vel.z)) * dt;
@@ -509,7 +571,8 @@ export class Player {
 
     // Falling endlessly through empty space (gravity can point anywhere): drop back in from
     // the sky above the terrain.
-    this.fallTime = this.onGround || this.flying || this.inWater ? 0 : this.fallTime + dt;
+    const falling = !this.onGround && !this.flying && !this.inWater && this.gravityStrength > 0.1;
+    this.fallTime = falling ? this.fallTime + dt : 0;
     if (this.fallTime > FALL_RESCUE_TIME) {
       this.fallTime = 0;
       this.setReference(null);
@@ -517,8 +580,6 @@ export class Player {
       this.pos.y = TERRAIN_HEIGHT;
       this.vel.set(0, 0, 0);
     }
-
-    this.syncCamera(dt);
   }
 
   // Move along one grid axis, stopping at the first box in the way. With `canStep`, a low

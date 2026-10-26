@@ -23,6 +23,10 @@ Any static file server works (`npx serve`, VS Code Live Server, GitHub Pages, â€
 - Face-culled chunk meshes with smooth ambient occlusion
 - Translucent water you can swim in, with an underwater fog effect
 - Walking, sprinting, jumping, flying, and AABB collision
+- Gravity generators: a full block that pulls toward itself from every side (build a mini planet), and plates
+  and slopes that pull toward their base. Full strength near them (jumping feels normal), fading to nothing
+  at 10 blocks. The terrain is a large body with its own gravity that fades above it; elsewhere you float in
+  zero-g with a jetpack
 - Gravity in any of the six axis directions, with the player smoothly reorienting to the new "down"
 - Ships: free-moving block grids you can stand on, walk around, pilot, and rebuild while they move.
   You ride along with a ship exactly (no sliding off), and neither you nor other ships can pass through it
@@ -41,8 +45,8 @@ Any static file server works (`npx serve`, VS Code Live Server, GitHub Pages, â€
 | Space | Jump / swim / fly up |
 | Shift | Sprint / fly down |
 | F | Toggle flying |
-| G | Shift gravity: the surface you're looking at becomes the floor |
-| H | Reset gravity to normal |
+| T / Shift+T | Rotate the shaped block you're looking at / move its base to the next face (for gravity plates and slopes: change which way they pull) |
+| WASD / Space / Shift (zero-g) | Jetpack |
 | N | Spawn a small ship deck in front of you |
 | R | Take / leave the controls of the ship you're on |
 | WASD / Space / Shift (piloting) | Thrust forward/back/sideways/up/down, relative to where you face |
@@ -64,7 +68,8 @@ Any static file server works (`npx serve`, VS Code Live Server, GitHub Pages, â€
 | `src/grid.js` | Voxel grid base class: cubic chunk storage, meshing, editing, raycasting |
 | `src/world.js` | The static world: terrain generation, chunk streaming, saved edits |
 | `src/ship.js` | Ships: moving grids with position, rotation, velocity, and collision |
-| `src/player.js` | First-person movement, collision, gravity frame, and riding ships |
+| `src/gravity.js` | The gravity field from generator blocks and the terrain |
+| `src/player.js` | First-person movement, collision, gravity frame, zero-g, and riding ships |
 | `src/blocks.js` | Block definitions (hardness, shape, permanent damage) |
 | `src/shapes.js` | Block shapes (slabs, plates, slopes): geometry, collision boxes, 24 orientations |
 | `src/textures.js` | Procedural texture atlas |

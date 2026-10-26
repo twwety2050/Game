@@ -26,6 +26,9 @@ for (const perm of [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1
 
 const rotate = (m, x, y, z) => [m[0] * x + m[1] * y + m[2] * z, m[3] * x + m[4] * y + m[5] * z, m[6] * x + m[7] * y + m[8] * z];
 
+// A direction (integer vector) rotated by orientation `meta`.
+export const applyRotation = (meta, v) => rotate(ROTATIONS[meta], v[0], v[1], v[2]);
+
 // Rotation whose canonical down (-Y) maps to `down` and front (+Z) maps to `front`.
 export function rotationFor(down, front) {
   for (let i = 0; i < ROTATIONS.length; i++) {
@@ -110,9 +113,11 @@ function buildVariant(def, m) {
     const n = cross(sub(verts[1], verts[0]), sub(verts[2], verts[0]));
     if (dot(n, normal) < 0) for (const t of tris) t.reverse();
     const cull = p.cull < 0 ? -1 : dirIndex(...rotate(m, ...DIRS[p.cull]));
+    // Which of the block's textures this polygon uses, from its canonical (unrotated) normal.
+    const role = p.normal[1] > 0.3 ? 'top' : p.normal[1] < -0.3 ? 'bottom' : 'side';
     // Same lighting model as cube faces: blend face shades by the normal's components.
     const shade = 0.75 * normal[0] ** 2 + 0.88 * normal[2] ** 2 + (normal[1] > 0 ? 1.0 : 0.55) * normal[1] ** 2;
-    return { verts, normal, tris, cull, shade };
+    return { verts, normal, tris, cull, shade, role };
   });
   const boxes = def.boxes.map((b) => {
     const a = rotatePoint(m, [b[0], b[1], b[2]]), c = rotatePoint(m, [b[3], b[4], b[5]]);

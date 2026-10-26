@@ -55,6 +55,9 @@ const covers = (id, meta, dir) => {
   return c === 2 || (c === 1 && ((FULL_MASK[SHAPE_OF[id] * 24 + meta] >> dir) & 1) === 1);
 };
 
+const IS_GRAVITY = table((d) => d.gravity !== null);
+const GRAVITY_BUCKET = 16; // edge length of the spatial hash cells for gravity sources
+
 const FULL_BOXES = [[0, 0, 0, 1, 1, 1]];
 // Collision boxes (block-local, 0..1) of a block with the given orientation.
 export const blockBoxes = (id, meta) => (SHAPE_OF[id] === SHAPE.FULL ? FULL_BOXES : VARIANTS[SHAPE_OF[id]][meta].boxes);
@@ -172,6 +175,9 @@ export class VoxelGrid {
     this.materials = materials;
     this.chunks = new Map();
     this.createChunks = false;  // whether setBlock may create missing chunks
+    // Gravity generator blocks, indexed by position and bucketed spatially for range queries.
+    this.gravitySources = new Map(); // "x,y,z" -> { x, y, z, id, meta, bucket }
+    this.gravityBuckets = new Map(); // bucket key -> Set of sources
     this.quaternion = new THREE.Quaternion();
   }
 
@@ -264,6 +270,7 @@ export class VoxelGrid {
     if (meta && !c.meta) c.meta = new Uint8Array(CS3);
     if (c.meta) c.meta[i] = meta;
     c.damage?.delete(i);
+    if (IS_GRAVITY[old] || IS_GRAVITY[id]) this.indexGravity(x, y, z, id, meta);
     this.onBlockChanged(x, y, z, old, id, key, i, meta);
 
     if (!remesh) { c.dirty = true; return true; }
@@ -277,6 +284,36 @@ export class VoxelGrid {
   }
 
   onBlockChanged() {}
+
+  // ---------- gravity sources ----------
+
+  indexGravity(x, y, z, id, meta) {
+    const key = x + ',' + y + ',' + z;
+    const old = this.gravitySources.get(key);
+    if (old) {
+      this.gravityBuckets.get(old.bucket).delete(old);
+      this.gravitySources.delete(key);
+    }
+    if (!IS_GRAVITY[id]) return;
+    const bucket = this.key(Math.floor(x / GRAVITY_BUCKET), Math.floor(y / GRAVITY_BUCKET), Math.floor(z / GRAVITY_BUCKET));
+    const entry = { x, y, z, id, meta, bucket };
+    this.gravitySources.set(key, entry);
+    let set = this.gravityBuckets.get(bucket);
+    if (!set) { set = new Set(); this.gravityBuckets.set(bucket, set); }
+    set.add(entry);
+  }
+
+  // Call fn(source) for every gravity block within roughly `range` of local point p.
+  forEachGravitySource(p, range, fn) {
+    if (this.gravitySources.size === 0) return;
+    const b0x = Math.floor((p.x - range) / GRAVITY_BUCKET), b1x = Math.floor((p.x + range) / GRAVITY_BUCKET);
+    const b0y = Math.floor((p.y - range) / GRAVITY_BUCKET), b1y = Math.floor((p.y + range) / GRAVITY_BUCKET);
+    const b0z = Math.floor((p.z - range) / GRAVITY_BUCKET), b1z = Math.floor((p.z + range) / GRAVITY_BUCKET);
+    for (let bx = b0x; bx <= b1x; bx++) for (let by = b0y; by <= b1y; by++) for (let bz = b0z; bz <= b1z; bz++) {
+      const set = this.gravityBuckets.get(this.key(bx, by, bz));
+      if (set) for (const src of set) fn(src);
+    }
+  }
 
   // Voxel DDA raycast in local coordinates. Returns the first non-liquid block hit, the face
   // normal, and the distance along the ray. Shaped blocks are hit only where their shape is.
@@ -383,7 +420,7 @@ export class VoxelGrid {
                 const q = p + FACES[poly.cull].offset;
                 if (covers(pad[q], padMeta[q], poly.cull ^ 1)) continue;
               }
-              solid.addPolygon(x, y, z, poly.verts, poly.uvs, poly.tris, def.side, poly.light);
+              solid.addPolygon(x, y, z, poly.verts, poly.uvs, poly.tris, def[poly.role], poly.light);
               if (dmg) cracks.addPolygon(x, y, z, poly.verts, poly.uvs, poly.tris, crackTile(dmg), 1);
             }
             continue;

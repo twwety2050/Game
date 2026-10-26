@@ -133,6 +133,25 @@ export function createAtlas() {
     put(T.HULL, rx + 1, ry + 1, [96, 102, 112]);
   }
 
+  // Gravity generator: dark gunmetal with a glowing cyan emitter ring (emitter face) or a
+  // thin glowing stripe (other faces).
+  const glow = (d) => [60 + 40 * d, 200 + 40 * d, 255];
+  each((x, y) => {
+    const ring = Math.max(Math.abs(x - 7.5), Math.abs(y - 7.5));
+    let c = vary([46, 50, 60], 0.05);
+    if (x === 0 || y === 0) c = [78, 84, 96];
+    else if (x === TILE - 1 || y === TILE - 1) c = [26, 28, 34];
+    else if (ring >= 4 && ring <= 5) c = glow(ring === 4 ? 1 : 0.5);
+    else if (ring <= 1.5) c = glow(0.8);
+    else if (ring < 4) c = [30 + 8 * (4 - ring), 70 + 20 * (4 - ring), 90 + 25 * (4 - ring)];
+    put(T.GRAVITY, x, y, c);
+    let side = vary([46, 50, 60], 0.05);
+    if (x === 0 || y === 0) side = [78, 84, 96];
+    else if (x === TILE - 1 || y === TILE - 1) side = [26, 28, 34];
+    else if (y === 3 || y === 4) side = glow(y === 3 ? 0.8 : 0.3);
+    put(T.GRAVITY_SIDE, x, y, side);
+  });
+
   // Crack overlays: one random crack pattern revealed progressively over the stages.
   const segments = [];
   for (let k = 0; k < 6; k++) {

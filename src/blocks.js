@@ -5,12 +5,13 @@ export const B = {
   AIR: 0, GRASS: 1, DIRT: 2, STONE: 3, SAND: 4, LOG: 5, LEAVES: 6, PLANKS: 7,
   COBBLE: 8, GLASS: 9, WATER: 10, BEDROCK: 11, BRICK: 12, SNOW: 13, COAL_ORE: 14, IRON_ORE: 15,
   HULL: 16, HULL_SLAB: 17, HULL_PLATE: 18, HULL_SLOPE: 19, HULL_SLOPE_LOW: 20, HULL_SLOPE_HIGH: 21,
+  GRAVITY: 22, GRAVITY_SLAB: 23, GRAVITY_SLOPE: 24, GRAVITY_SLOPE_LOW: 25, GRAVITY_SLOPE_HIGH: 26,
 };
 
 export const T = {
   GRASS_TOP: 0, GRASS_SIDE: 1, DIRT: 2, STONE: 3, SAND: 4, LOG_SIDE: 5, LOG_TOP: 6, LEAVES: 7,
   PLANKS: 8, COBBLE: 9, GLASS: 10, WATER: 11, BEDROCK: 12, BRICK: 13, SNOW: 14, SNOW_SIDE: 15,
-  COAL_ORE: 16, IRON_ORE: 17, HULL: 18,
+  COAL_ORE: 16, IRON_ORE: 17, HULL: 18, GRAVITY: 19, GRAVITY_SIDE: 20,
   CRACK: 24, // 8 crack stages: tiles 24..31
 };
 export const CRACK_STAGES = 8;
@@ -35,6 +36,9 @@ function def(id, name, tex, opts = {}) {
     hardness: opts.hardness ?? 1,                 // seconds to break by hand
     permanentDamage: opts.permanentDamage ?? false, // cracks stay when you stop mining
     placeable: opts.placeable ?? true,            // shown in the inventory
+    // Gravity generator: 'radial' pulls toward the block from every side, 'directional'
+    // pulls toward the block's base (its canonical -Y, rotated by its orientation).
+    gravity: opts.gravity ?? null,
   };
 }
 
@@ -64,4 +68,13 @@ def(B.HULL_SLOPE, 'Hull Slope 45°', { all: T.HULL }, hull(SHAPE.SLOPE));
 def(B.HULL_SLOPE_LOW, 'Hull Slope 26.6° (low)', { all: T.HULL }, hull(SHAPE.SLOPE_LOW));
 def(B.HULL_SLOPE_HIGH, 'Hull Slope 26.6° (high)', { all: T.HULL }, hull(SHAPE.SLOPE_HIGH));
 
-export const HOTBAR = [B.HULL, B.HULL_SLAB, B.HULL_PLATE, B.HULL_SLOPE, B.HULL_SLOPE_LOW, B.HULL_SLOPE_HIGH, B.GLASS, B.PLANKS, B.STONE];
+// Gravity generators. The emitter face is the one you stand on; shaped ones pull toward their base.
+const grav = (shape) => ({ shape, hardness: 4, permanentDamage: true, gravity: shape === SHAPE.FULL ? 'radial' : 'directional' });
+const gravTex = { top: T.GRAVITY, side: T.GRAVITY_SIDE, bottom: T.GRAVITY_SIDE };
+def(B.GRAVITY, 'Gravity Block', { all: T.GRAVITY }, grav(SHAPE.FULL));
+def(B.GRAVITY_SLAB, 'Gravity Plate', gravTex, grav(SHAPE.SLAB));
+def(B.GRAVITY_SLOPE, 'Gravity Slope 45°', gravTex, grav(SHAPE.SLOPE));
+def(B.GRAVITY_SLOPE_LOW, 'Gravity Slope 26.6° (low)', gravTex, grav(SHAPE.SLOPE_LOW));
+def(B.GRAVITY_SLOPE_HIGH, 'Gravity Slope 26.6° (high)', gravTex, grav(SHAPE.SLOPE_HIGH));
+
+export const HOTBAR = [B.HULL, B.HULL_SLAB, B.HULL_PLATE, B.HULL_SLOPE, B.HULL_SLOPE_LOW, B.HULL_SLOPE_HIGH, B.GRAVITY_SLAB, B.GRAVITY, B.GLASS];

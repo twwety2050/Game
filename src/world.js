@@ -25,6 +25,14 @@ export class World extends VoxelGrid {
     this.damage = new Map(); // chunk key -> Map(local index -> damage), shared with loaded chunks
     for (const [key, list] of Object.entries(saved.edits ?? {})) this.edits.set(key, new Map(list));
     for (const [key, list] of Object.entries(saved.damage ?? {})) this.damage.set(key, new Map(list));
+    // Gravity generators only ever come from edits, so index them up front: they keep
+    // working even while their chunk isn't loaded.
+    for (const [key, map] of this.edits) {
+      const [cx, cy, cz] = key.split(',').map(Number);
+      for (const [i, v] of map) {
+        this.indexGravity(cx * CS + (i % CS), cy * CS + Math.floor(i / (CS * CS)), cz * CS + (Math.floor(i / CS) % CS), v & 255, v >> 8);
+      }
+    }
     this.setRenderDistance(renderDistance);
   }
 

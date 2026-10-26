@@ -3,7 +3,7 @@ import { createAtlas, ATLAS } from './textures.js';
 import { B, BLOCKS, HOTBAR, T } from './blocks.js';
 import { World, CS } from './world.js';
 import { VoxelGrid, crackStage } from './grid.js';
-import { SHAPE, rotationFor } from './shapes.js';
+import { SHAPE, rotationFor, applyRotation, DIRS } from './shapes.js';
 import { Ship } from './ship.js';
 import { Player } from './player.js';
 import { Hud } from './hud.js';
@@ -221,12 +221,8 @@ addEventListener('keydown', (e) => {
     if (n >= 1 && n <= 9) hud.select(n - 1);
   } else if (e.code === 'KeyF') {
     player.toggleFly();
-  } else if (e.code === 'KeyG' && locked && target) {
-    // Make the face you're looking at the floor: gravity pulls into that block.
-    if (player.setUp(new THREE.Vector3(target.nx, target.ny, target.nz))) hud.toast(`Gravity ${player.gravityLabel()}`);
-    else if (!player.up.equals(new THREE.Vector3(target.nx, target.ny, target.nz))) hud.toast('No room to turn');
-  } else if (e.code === 'KeyH' && locked) {
-    if (player.setUp(new THREE.Vector3(0, 1, 0))) hud.toast('Gravity reset');
+  } else if (e.code === 'KeyT' && locked && target) {
+    rotateTarget(e.shiftKey);
   } else if (e.code === 'KeyN' && locked) {
     spawnShip();
   } else if (e.code === 'KeyR' && locked) {
@@ -299,6 +295,35 @@ function placementRotation(id, grid) {
   const front = [0, 0, 0];
   front[axis] = Math.sign(toward.getComponent(axis)) || 1;
   return rotationFor(down, front);
+}
+
+const AXIS_LABELS = ['-X', '+X', '-Y', '+Y', '-Z', '+Z'];
+
+// Rotate the shaped block you're looking at. T spins it about its base; Shift+T moves its
+// base to the next face (for gravity plates and slopes, that's the direction they pull).
+function rotateTarget(changeBase) {
+  const def = BLOCKS[target.id];
+  if (def.shape === SHAPE.FULL) {
+    hud.toast(def.gravity ? 'Gravity blocks pull toward themselves from every side' : 'Only shaped blocks can be rotated');
+    return;
+  }
+  const { grid, x, y, z } = target;
+  const meta = grid.getMeta(x, y, z);
+  let down = applyRotation(meta, [0, -1, 0]);
+  let front = applyRotation(meta, [0, 0, 1]);
+  if (changeBase) {
+    const i = DIRS.findIndex((d) => d[0] === down[0] && d[1] === down[1] && d[2] === down[2]);
+    down = DIRS[(i + 1) % 6];
+    if (Math.abs(down[0] * front[0] + down[1] * front[1] + down[2] * front[2]) === 1) front = [down[1], down[2], down[0]];
+  } else {
+    // Turn the front a quarter turn about the base direction.
+    front = [down[1] * front[2] - down[2] * front[1], down[2] * front[0] - down[0] * front[2], down[0] * front[1] - down[1] * front[0]];
+  }
+  const damage = grid.getDamage(x, y, z);
+  grid.setBlock(x, y, z, target.id, { meta: rotationFor(down, front) });
+  if (damage) grid.setDamage(x, y, z, damage);
+  const where = AXIS_LABELS[DIRS.findIndex((d) => d[0] === down[0] && d[1] === down[1] && d[2] === down[2])];
+  hud.toast(def.gravity ? `Pulls toward ${where}${grid === world ? '' : ' (ship)'}` : `Base facing ${where}`);
 }
 
 // ---------- mining ----------
@@ -510,7 +535,7 @@ function frame(now) {
       `Chunk: ${Math.floor(p.x / CS)}, ${Math.floor(p.y / CS)}, ${Math.floor(p.z / CS)}   loaded: ${world.chunks.size}`,
       `Facing: ${target ? `${BLOCKS[target.id].name} @ ${target.x} ${target.y} ${target.z}${target.grid === world ? '' : ' (ship)'}  damage ${Math.round(target.grid.getDamage(target.x, target.y, target.z) * 100)}%` : '-'}`,
       `Ships: ${ships.length}   riding: ${ship ? `ship #${ships.indexOf(ship)} (${ship.blockCount} blocks, ${ship.velocity.length().toFixed(1)} m/s)` : 'world'}`,
-      `Mode: ${player.flying ? 'flying' : player.inWater ? 'swimming' : 'walking'}   gravity: ${player.gravityLabel()}   seed: ${seed}`,
+      `Mode: ${player.flying ? 'flying' : player.zeroG ? 'zero-g' : player.inWater ? 'swimming' : 'walking'}   gravity: ${player.gravityLabel()} ${Math.round(player.gravityStrength * 100)}%   seed: ${seed}`,
       `Draw calls: ${renderer.info.render.calls}  tris: ${renderer.info.render.triangles}`,
     ].join('\n'));
   }
@@ -521,11 +546,15 @@ const statusEl = document.getElementById('status');
 function updateStatus() {
   const ship = player.ref;
   let text = '';
+  if (!ship || !player.piloting) {
+    if (player.zeroG) text = 'ZERO-G  ·  WASD / Space / Shift jetpack';
+    else if (player.gravityStrength < 0.97 && !player.flying) text = `Gravity ${Math.round(player.gravityStrength * 100)}%`;
+  }
   if (ship && player.piloting) {
     text = `PILOTING  ${ship.velocity.length().toFixed(1)} m/s  ·  WASD / Space / Shift thrust  ·  Q/E turn  ·  X brake  ·  R leave controls`;
   } else if (ship) {
     const drift = ship.velocity.length();
-    text = `Aboard ship${drift > 0.05 ? ` (drifting ${drift.toFixed(1)} m/s)` : ''}  ·  R to pilot`;
+    text = `Aboard ship${drift > 0.05 ? ` (drifting ${drift.toFixed(1)} m/s)` : ''}  ·  R to pilot${text ? `  ·  ${text}` : ''}`;
   }
   if (statusEl.textContent !== text) statusEl.textContent = text;
   statusEl.classList.toggle('hidden', !text);
