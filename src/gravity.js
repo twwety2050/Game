@@ -16,6 +16,7 @@ import { BLOCKS } from './blocks.js';
 import { applyRotation } from './shapes.js';
 import { TERRAIN_HEIGHT } from './world.js';
 
+export const G = 28;           // acceleration at full strength, blocks/s^2 (players and ships)
 export const FULL_RANGE = 2.5; // blocks from the generator's surface to the body's centre
 export const RANGE = 10;
 const TERRAIN_FULL_RANGE = 16; // distance from the terrain layer with full terrain gravity
@@ -57,12 +58,13 @@ function sourcePull(src, p, out) {
 }
 
 // Gravity at world point `wp`. Writes the pull into `out` (world space; its length is the
-// strength in [0, 1]) and returns `out`.
-export function gravityAt(wp, world, ships, out = new THREE.Vector3()) {
+// strength in [0, 1]) and returns `out`. Gravity blocks on `exclude` (a ship asking about
+// itself) are ignored: a ship isn't pulled by its own generators.
+export function gravityAt(wp, world, ships, out = new THREE.Vector3(), exclude = null) {
   _sum.set(0, 0, 0);
   let strongest = 0;
   for (const grid of [world, ...ships]) {
-    if (grid.gravitySources.size === 0) continue;
+    if (grid === exclude || grid.gravitySources.size === 0) continue;
     if (grid !== world && (grid.updateShape(), wp.distanceTo(grid.position) > grid.radius + RANGE + 1)) continue;
     grid.worldToLocal(wp, _p);
     grid.forEachGravitySource(_p, RANGE, (src) => {

@@ -6,12 +6,16 @@
 import * as THREE from 'three';
 import { VoxelGrid, SOLID, CS, idx } from './grid.js';
 import { B } from './blocks.js';
+import { gravityAt, G } from './gravity.js';
 
 const _v = new THREE.Vector3();
 const _w = new THREE.Vector3();
 const _q = new THREE.Quaternion();
 const _prevPos = new THREE.Vector3();
 const _prevQuat = new THREE.Quaternion();
+const _g = new THREE.Vector3();
+const GRAVITY_SAMPLES = 32;  // exposed blocks sampled when measuring the gravity on a ship
+const MAX_FALL_SPEED = 60;
 
 // Corners of a block, inset slightly so grids resting face-to-face don't count as overlapping.
 const INSET = 0.05;
@@ -40,6 +44,8 @@ export class Ship extends VoxelGrid {
     this.radius = 0;                     // bounding sphere radius around the centre of mass
     this.surface = [];                   // local coords of blocks exposed to the outside
     this.shapeDirty = true;
+    this.gravity = new THREE.Vector3();  // average pull on the ship, world space, strength 0..1
+    this.piloted = false;                // a pilot's thrusters hold the ship against gravity
   }
 
   // ---------- transform ----------
@@ -147,15 +153,42 @@ export class Ship extends VoxelGrid {
 
   // ---------- motion ----------
 
+  // Average gravity over the ship: its centre of mass plus a spread of its exposed blocks, so
+  // a large ship feels a gravity plate its hull is near even if its centre is far away.
+  measureGravity(world, ships) {
+    this.updateShape();
+    this.gravity.set(0, 0, 0);
+    const surf = this.surface, count = surf.length / 3;
+    const stride = Math.max(1, Math.floor(count / GRAVITY_SAMPLES));
+    let n = 1;
+    this.gravity.add(gravityAt(this.position, world, ships, _g, this));
+    for (let i = 0; i < count; i += stride, n++) {
+      this.localToWorld(_v.set(surf[i * 3] + 0.5, surf[i * 3 + 1] + 0.5, surf[i * 3 + 2] + 0.5), _w);
+      this.gravity.add(gravityAt(_w, world, ships, _g, this));
+    }
+    return this.gravity.divideScalar(n);
+  }
+
+  // Advance the ship. Returns the impact speed if it hit something this step, else 0.
   update(dt, world, ships) {
-    if (this.blockCount === 0) return;
-    const speed = this.velocity.length(), spin = this.angularVelocity.length();
-    if (speed < 1e-4 && spin < 1e-4) return;
+    if (this.blockCount === 0) return 0;
     this.updateShape();
 
     // A ship that is already overlapping something (e.g. built into the ground) may move
-    // freely until it is clear; otherwise movement stops at the first contact.
+    // freely until it is clear, and isn't pulled by gravity meanwhile; otherwise movement
+    // stops at the first contact.
+    this.measureGravity(world, ships);
+    const pulled = !this.piloted && this.gravity.lengthSq() > 1e-6;
+    let speed = this.velocity.length();
+    const spin = this.angularVelocity.length();
+    if (!pulled && speed < 1e-4 && spin < 1e-4) return 0;
     const startsClear = !this.intersectsAnything(world, ships);
+    if (pulled && startsClear) {
+      this.velocity.addScaledVector(this.gravity, G * dt);
+      if (this.velocity.length() > MAX_FALL_SPEED) this.velocity.setLength(MAX_FALL_SPEED);
+      speed = this.velocity.length();
+    }
+    if (speed < 1e-4 && spin < 1e-4) return 0;
     const travel = (speed + spin * this.radius) * dt;
     const steps = Math.min(20, Math.max(1, Math.ceil(travel / 0.25)));
     const sdt = dt / steps;
@@ -174,10 +207,10 @@ export class Ship extends VoxelGrid {
         this.syncTransform();
         this.velocity.set(0, 0, 0);
         this.angularVelocity.set(0, 0, 0);
-        return 'collided';
+        return Math.max(speed, 1e-3);
       }
     }
-    return null;
+    return 0;
   }
 
   // ---------- lifecycle ----------

@@ -18,13 +18,12 @@ import * as THREE from 'three';
 import { BLOCKS } from './blocks.js';
 import { SOLID, blockBoxes } from './grid.js';
 import { TERRAIN_HEIGHT } from './world.js';
-import { gravityAt } from './gravity.js';
+import { gravityAt, G as GRAVITY } from './gravity.js';
 
 const HALF = 0.3;      // half the player's width (and the capsule radius)
 const HEIGHT = 1.8;
 const EYE = 1.62;
 const EPS = 1e-3;
-const GRAVITY = 28;
 const JUMP = 8.6;
 const WALK = 4.3;
 const SPRINT = 6.2;

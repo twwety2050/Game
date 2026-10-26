@@ -406,7 +406,8 @@ const thrust = new THREE.Vector3();
 const spin = new THREE.Vector3();
 
 // Fly the ship the player is standing on. Thrust follows the player's view; with no input
-// the inertial dampeners bring it to rest. Leave the controls and it keeps drifting.
+// the inertial dampeners bring it to rest, and while piloted the thrusters hold it against
+// gravity. Leave the controls and it keeps drifting (or falls, if something is pulling it).
 function pilotShip(dt) {
   const ship = player.ref;
   if (!ship) { player.piloting = false; return; }
@@ -495,7 +496,9 @@ function frame(now) {
   if (locked) {
     pilotShip(dt);
     for (const ship of ships) {
-      if (ship.update(dt, world, ships) === 'collided' && ship === player.ref) hud.toast('Collision!');
+      ship.piloted = player.piloting && player.ref === ship;
+      const impact = ship.update(dt, world, ships);
+      if (impact > 4 && ship === player.ref) hud.toast('Collision!');
     }
   }
 
