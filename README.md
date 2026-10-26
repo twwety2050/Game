@@ -15,18 +15,19 @@ Any static file server works (`npx serve`, VS Code Live Server, GitHub Pages, �
 
 ## Features
 
-- A world that is infinite on all three axes, streamed in cubic 32×32×32 chunks; you can build anywhere,
-  including in the empty space above and below the terrain
-- Seeded terrain (for now, a layer between y = 0 and 96): plains, beaches, oceans, forests, snowy mountains
-- Caves, coal and iron ore, bedrock floor
+- A seeded solar system in a world that is infinite on all three axes, streamed in cubic 32×32×32 chunks:
+  a star and five planets (rocky, verdant, desert, ice) shaped like rounded, contoured cubes, a starfield,
+  and drifting, tumbling meteorites you can mine. Distant bodies are visible across the system
+- Every planet has a gravity core: full gravity across its surface (normal on a medium planet, weaker on small
+  ones, stronger on large ones), fading to nothing about 50 blocks up
+- You start on your own small ship, floating near the home planet
 - Procedurally painted pixel-art textures (no image files)
 - Face-culled chunk meshes with smooth ambient occlusion
 - Translucent water you can swim in, with an underwater fog effect
 - Walking, sprinting, jumping, flying, and AABB collision
 - Gravity generators: a full block that pulls toward itself from every side (build a mini planet), and plates
   and slopes that pull toward their base. Full strength near them (jumping feels normal), fading to nothing
-  at 10 blocks. The terrain is a large body with its own gravity that fades above it; elsewhere you float in
-  zero-g with a jetpack. Gravity acts on ships too: they fall, land, and are pulled by other ships' generators
+  at 10 blocks. Away from planets and generators you float in zero-g with a jetpack. Gravity acts on ships too: they fall, land, and are pulled by other ships' generators
   (never their own; the pull is mutual). A piloted ship's thrusters hold it against gravity
 - Ships are rigid bodies (mass and inertia from their blocks): they tip off ledges, roll off corners, tumble in
   uneven gravity, and collide with friction and a little bounce; ships at rest go to sleep until disturbed
@@ -42,7 +43,6 @@ Any static file server works (`npx serve`, VS Code Live Server, GitHub Pages, �
 - Ship hull: metal blocks in six shapes (full block, half block, plate, 45° slope, and a two-piece 26.6° slope)
   that orient to the surface you place them on. Hull damage is permanent: cracks stay and are saved
 - Walking up half blocks and slopes without jumping
-- Day/night cycle with a square sun and moon
 - Saves automatically to `localStorage` (world edits, position, time, hotbar)
 
 ## Controls
@@ -72,10 +72,10 @@ Any static file server works (`npx serve`, VS Code Live Server, GitHub Pages, �
 | --- | --- |
 | `src/main.js` | Renderer, input, block interaction, sky, game loop, saving |
 | `src/grid.js` | Voxel grid base class: cubic chunk storage, meshing, editing, raycasting |
-| `src/world.js` | The static world: terrain generation, chunk streaming, saved edits |
+| `src/world.js` | The static world: solar system generation, chunk streaming, saved edits |
 | `src/ship.js` | Ships: rigid-body grids with gravity, buoyancy, collisions, and thrusters |
 | `src/console.js` | The navigation console screen (thruster-to-key mapping) |
-| `src/gravity.js` | The gravity field from generator blocks and the terrain |
+| `src/gravity.js` | The gravity field from generator blocks and celestial bodies |
 | `src/player.js` | First-person movement, collision, gravity frame, zero-g, and riding ships |
 | `src/blocks.js` | Block definitions (hardness, shape, permanent damage) |
 | `src/shapes.js` | Block shapes (slabs, plates, slopes): geometry, collision boxes, 24 orientations |

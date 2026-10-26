@@ -1,7 +1,7 @@
 // The gravity field: where "down" is, and how strong it is, at any point in the world.
 //
-// Sources are gravity generator blocks (in the world or on ships) and the terrain itself,
-// which acts as a large body. Each source pulls with a strength in [0, 1]:
+// Sources are gravity generator blocks (in the world or on ships) and the celestial bodies
+// (the star and planets), which pull toward their gravity cores. Each source pulls with a strength in [0, 1]:
 //   - full strength within FULL_RANGE of the block, so walking and jumping feel normal,
 //   - then decaying with distance, reaching zero at RANGE.
 // Radial blocks (full gravity blocks) pull toward their nearest point from every side.
@@ -10,17 +10,15 @@
 //
 // Sources combine without stacking: the direction is the strength-weighted average, and the
 // strength is that of the strongest source, so a floor of many plates pulls like one.
-// Generators override the terrain's pull in proportion to their strength.
+// Generators override a body's pull in proportion to their strength. Strength is 1 for normal
+// gravity; big bodies can exceed it.
 import * as THREE from 'three';
 import { BLOCKS } from './blocks.js';
 import { applyRotation } from './shapes.js';
-import { TERRAIN_HEIGHT } from './world.js';
 
 export const G = 28;           // acceleration at full strength, blocks/s^2 (players and ships)
 export const FULL_RANGE = 2.5; // blocks from the generator's surface to the body's centre
 export const RANGE = 10;
-const TERRAIN_FULL_RANGE = 16; // distance from the terrain layer with full terrain gravity
-const TERRAIN_RANGE = 128;
 
 const _p = new THREE.Vector3();
 const _d = new THREE.Vector3();
@@ -81,12 +79,16 @@ export function gravityAt(wp, world, ships, out = new THREE.Vector3(), exclude =
     if (before) shares.set(grid, before.subVectors(_sum, before).clone());
   }
 
-  // The terrain layer (0 <= y < TERRAIN_HEIGHT) is a large body pulling toward itself.
-  const dist = wp.y > TERRAIN_HEIGHT ? wp.y - TERRAIN_HEIGHT : wp.y < 0 ? -wp.y : 0;
-  const terrain = falloff(dist, TERRAIN_FULL_RANGE, TERRAIN_RANGE) * (1 - strongest);
-  if (terrain > 0) {
-    _sum.y += (wp.y < 0 ? 1 : -1) * terrain;
-    strongest = Math.max(strongest, terrain);
+  // Celestial bodies pull toward their cores.
+  const override = Math.min(1, strongest);
+  for (const b of world.bodies) {
+    _d.set(b.center[0] + 0.5 - wp.x, b.center[1] + 0.5 - wp.y, b.center[2] + 0.5 - wp.z);
+    const dist = _d.length();
+    if (dist >= b.range || dist < 1e-6) continue;
+    const s = b.surfaceG * falloff(dist, b.full, b.range) * (1 - override);
+    if (s <= 0) continue;
+    _sum.addScaledVector(_d, s / dist);
+    strongest = Math.max(strongest, s);
   }
 
   if (_sum.lengthSq() < 1e-10) return out.set(0, 0, 0);

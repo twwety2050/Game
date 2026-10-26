@@ -17,7 +17,6 @@
 import * as THREE from 'three';
 import { BLOCKS } from './blocks.js';
 import { SOLID, blockBoxes } from './grid.js';
-import { TERRAIN_HEIGHT } from './world.js';
 import { gravityAt, G as GRAVITY } from './gravity.js';
 
 const HALF = 0.3;      // half the player's width (and the capsule radius)
@@ -29,7 +28,6 @@ const WALK = 4.3;
 const SPRINT = 6.2;
 const FLY = 11;
 const TURN_TIME = 0.45;       // seconds to reorient after gravity changes
-const FALL_RESCUE_TIME = 10;  // seconds of nonstop falling before being dropped back onto terrain
 const SPHERES = [HALF, HEIGHT / 2, HEIGHT - HALF]; // capsule sphere heights above the feet
 const SHIP_EXIT_MARGIN = 1.5; // how far outside a ship's bounds you can drift before leaving it
 const STEP_HEIGHT = 0.55;     // ledges up to this high (slabs, slopes) are walked up automatically
@@ -74,7 +72,6 @@ export class Player {
     this.piloting = false;
     this.inWater = false;
     this.headInWater = false;
-    this.fallTime = 0;
     this.stepOffset = 0; // eye lag after stepping up, smoothed away over a few frames
     this.gravity = new THREE.Vector3(); // current pull, grid-local; length is strength in [0, 1]
     this.gravityStrength = 1;
@@ -292,6 +289,23 @@ export class Player {
     this.turn = { t: 0, from, oldUp: this.up.clone(), delta: new THREE.Quaternion() };
   }
 
+  // Stand on `ship` at local position `pos`, upright in the ship's own axes and facing its
+  // forward (-Z).
+  boardAt(ship, pos) {
+    this.ref = ship;
+    this.piloting = false;
+    this.pos.copy(pos);
+    this.vel.set(0, 0, 0);
+    this.right.set(1, 0, 0);
+    this.up.set(0, 1, 0);
+    this.back.set(0, 0, 1);
+    this.applyFrame();
+    this.viewFrame.copy(this.frame);
+    this.turn = null;
+    this.yaw = 0;
+    this.pitch = 0;
+  }
+
   // ---------- collision ----------
 
   // Nudge along the up axis until the body fits. Returns false if no spot nearby is free.
@@ -497,7 +511,7 @@ export class Player {
   walk(dt) {
     const k = this.keys;
     const up = this.up;
-    const g = Math.min(1, this.gravityStrength);
+    const g = this.gravityStrength;
 
     // Work in the gravity frame: x = right, y = up, z = back.
     let vx = this.vel.dot(this.right), vy = this.vel.dot(up), vz = this.vel.dot(this.back);
@@ -567,18 +581,6 @@ export class Player {
     if (groundOther) this.onGround = true;
     if (this.onGround && this.flying && !jump) this.flying = false;
     this.updateReference(groundOther, onOwnGround);
-
-    // Falling endlessly through empty space (gravity can point anywhere): drop back in from
-    // the sky above the terrain.
-    const falling = !this.onGround && !this.flying && !this.inWater && this.gravityStrength > 0.1;
-    this.fallTime = falling ? this.fallTime + dt : 0;
-    if (this.fallTime > FALL_RESCUE_TIME) {
-      this.fallTime = 0;
-      this.setReference(null);
-      this.setUp(new THREE.Vector3(0, 1, 0), { instant: true });
-      this.pos.y = TERRAIN_HEIGHT;
-      this.vel.set(0, 0, 0);
-    }
   }
 
   // Move along one grid axis, stopping at the first box in the way. With `canStep`, a low

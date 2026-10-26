@@ -7,13 +7,14 @@ export const B = {
   HULL: 16, HULL_SLAB: 17, HULL_PLATE: 18, HULL_SLOPE: 19, HULL_SLOPE_LOW: 20, HULL_SLOPE_HIGH: 21,
   GRAVITY: 22, GRAVITY_SLAB: 23, GRAVITY_SLOPE: 24, GRAVITY_SLOPE_LOW: 25, GRAVITY_SLOPE_HIGH: 26,
   THRUSTER: 27, NAV_CONSOLE: 28,
+  TURF: 29, SNOW_BLOCK: 30, STAR: 31, GRAVITY_CORE: 32,
 };
 
 export const T = {
   GRASS_TOP: 0, GRASS_SIDE: 1, DIRT: 2, STONE: 3, SAND: 4, LOG_SIDE: 5, LOG_TOP: 6, LEAVES: 7,
   PLANKS: 8, COBBLE: 9, GLASS: 10, WATER: 11, BEDROCK: 12, BRICK: 13, SNOW: 14, SNOW_SIDE: 15,
   COAL_ORE: 16, IRON_ORE: 17, HULL: 18, GRAVITY: 19, GRAVITY_SIDE: 20,
-  THRUSTER_SIDE: 21, THRUSTER_NOZZLE: 22, CONSOLE_SCREEN: 23, CONSOLE_SIDE: 32,
+  THRUSTER_SIDE: 21, THRUSTER_NOZZLE: 22, CONSOLE_SCREEN: 23, CONSOLE_SIDE: 32, STAR: 33, CORE: 34,
   CRACK: 24, // 8 crack stages: tiles 24..31
 };
 export const CRACK_STAGES = 8;
@@ -65,6 +66,13 @@ def(B.BRICK, 'Bricks', { all: T.BRICK }, { hardness: 1.5, density: 2.0 });
 def(B.SNOW, 'Snowy Grass', { top: T.SNOW, side: T.SNOW_SIDE, bottom: T.DIRT }, { hardness: 0.6, density: 1.5 });
 def(B.COAL_ORE, 'Coal Ore', { all: T.COAL_ORE }, { hardness: 2, density: 2.6 });
 def(B.IRON_ORE, 'Iron Ore', { all: T.IRON_ORE }, { hardness: 2.5, density: 3.5 });
+
+// Planet materials. Planets have no single "up", so these look the same on every face.
+def(B.TURF, 'Turf', { all: T.GRASS_TOP }, { hardness: 0.6, density: 1.5 });
+def(B.SNOW_BLOCK, 'Snow', { all: T.SNOW }, { hardness: 0.4, density: 0.9 });
+def(B.STAR, 'Star Matter', { all: T.STAR }, { hardness: 6, density: 1.4 });
+// Sits at the heart of every planet; the planet's gravity is centred on it.
+def(B.GRAVITY_CORE, 'Gravity Core', { all: T.CORE }, { breakable: false, placeable: false, density: 8 });
 
 // Ship hull: thin metal plating around a light frame (so hulls float), with permanent damage.
 const hull = (shape) => ({ shape, hardness: 4, permanentDamage: true, density: 0.5 });

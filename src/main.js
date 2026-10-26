@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { createAtlas, ATLAS } from './textures.js';
 import { B, BLOCKS, HOTBAR, T } from './blocks.js';
 import { World, CS } from './world.js';
+import { mulberry32 } from './noise.js';
 import { VoxelGrid, crackStage } from './grid.js';
 import { SHAPE, rotationFor, applyRotation, DIRS } from './shapes.js';
 import { Ship, CONTROL_KEYS } from './ship.js';
@@ -9,10 +10,10 @@ import { NavConsoleUI } from './console.js';
 import { Player } from './player.js';
 import { Hud } from './hud.js';
 
-const SAVE_KEY = 'voxelcraft-save-v2';
+const SAVE_KEY = 'voxelcraft-save-v3'; // v3: the solar system replaced the old terrain
 const REACH = 6;
-const DAY_LENGTH = 600; // seconds for a full day/night cycle
 const RENDER_DISTANCE = 3; // in chunks, on every axis
+const METEORITES = 14;
 
 let save = null;
 try { save = JSON.parse(localStorage.getItem(SAVE_KEY)); } catch { save = null; }
@@ -26,7 +27,7 @@ renderer.setSize(innerWidth, innerHeight);
 document.getElementById('game').appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.05, 1000);
+const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.05, 6000);
 camera.rotation.order = 'YXZ';
 
 const atlas = createAtlas();
@@ -47,14 +48,30 @@ const crackMat = new THREE.MeshBasicMaterial({
 });
 const materials = { solid: solidMat, water: waterMat, crack: crackMat };
 
-const fogFar = RENDER_DISTANCE * CS;
-scene.fog = new THREE.Fog(0x87ceeb, fogFar * 0.55, fogFar);
-scene.background = new THREE.Color(0x87ceeb);
+// Space: a black sky with no haze (the distant-body stand-ins cover the edge of the loaded
+// area). Fog is only used underwater.
+const SPACE = new THREE.Color(0x02030a);
+const waterFog = new THREE.Fog(0x1f4a8a, 1, 24);
+scene.background = SPACE.clone();
 
-// Square sun and moon, kept at a fixed distance around the camera.
-const sun = new THREE.Mesh(new THREE.PlaneGeometry(60, 60), new THREE.MeshBasicMaterial({ color: 0xfff3b0, fog: false }));
-const moon = new THREE.Mesh(new THREE.PlaneGeometry(40, 40), new THREE.MeshBasicMaterial({ color: 0xdde6f0, fog: false }));
-scene.add(sun, moon);
+// Distant stars: points on a huge sphere that travels with the camera.
+const starfield = (() => {
+  const rand = mulberry32(99);
+  const count = 4000, pos = new Float32Array(count * 3), col = new Float32Array(count * 3);
+  for (let i = 0; i < count; i++) {
+    const u = rand() * 2 - 1, a = rand() * Math.PI * 2, r = Math.sqrt(1 - u * u);
+    pos.set([Math.cos(a) * r * 4000, u * 4000, Math.sin(a) * r * 4000], i * 3);
+    const b = 0.3 + 0.7 * rand() ** 3, tint = rand();
+    col.set([b * (tint > 0.85 ? 1 : 0.85), b * 0.9, b * (tint < 0.15 ? 0.7 : 1)], i * 3);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  const points = new THREE.Points(g, new THREE.PointsMaterial({ size: 1.6, sizeAttenuation: false, vertexColors: true, fog: false }));
+  points.renderOrder = -1;
+  scene.add(points);
+  return points;
+})();
 
 const highlight = new THREE.LineSegments(
   new THREE.EdgesGeometry(new THREE.BoxGeometry(1.004, 1.004, 1.004)),
@@ -123,21 +140,44 @@ function renderBlockIcons() {
 
 // ---------- game objects ----------
 
-const world = new World(scene, materials, seed, save?.world ?? { edits: save?.edits }, RENDER_DISTANCE);
+const world = new World(scene, materials, seed, save?.world ?? {}, RENDER_DISTANCE);
 const ships = (save?.ships ?? []).map((data) => Ship.deserialize(data, scene, materials));
 const player = new Player(camera, world, ships);
+
+// Far-away stand-ins for the star and planets, so they're visible across the system before
+// their blocks load. Each is the body's rounded-cube shape, slightly inside the real surface,
+// and is hidden once you're close enough for the real blocks to be loaded around you.
+const BODY_COLORS = { star: [1, 0.8, 0.35], verdant: [0.35, 0.6, 0.22], desert: [0.85, 0.78, 0.52], ice: [0.92, 0.96, 1], rocky: [0.48, 0.47, 0.46] };
+const impostors = world.bodies.map((b) => {
+  const g = new THREE.SphereGeometry(1, 64, 48);
+  const pos = g.attributes.position, colors = [];
+  const rand = mulberry32(Math.floor(b.seed * 1000));
+  for (let i = 0; i < pos.count; i++) {
+    const v = new THREE.Vector3().fromBufferAttribute(pos, i);
+    const k = Math.pow(Math.abs(v.x) ** 4 + Math.abs(v.y) ** 4 + Math.abs(v.z) ** 4, -1 / 4);
+    pos.setXYZ(i, v.x * k, v.y * k, v.z * k);
+    const shade = 0.85 + rand() * 0.15;
+    colors.push(...BODY_COLORS[b.kind].map((c) => Math.pow(c * shade, 2.2)));
+  }
+  g.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  const mesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ vertexColors: true, fog: false }));
+  mesh.position.set(b.center[0] + 0.5, b.center[1] + 0.5, b.center[2] + 0.5);
+  mesh.scale.setScalar(b.R * 0.96);
+  scene.add(mesh);
+  return { body: b, mesh };
+});
+
 if (save?.player) player.restore(save.player);
-else player.spawn(world.findSpawn());
+else startNewGame();
 player.syncCamera();
 
 const hud = new Hud(renderBlockIcons(), save?.hotbar ?? HOTBAR);
-let time = save?.time ?? 0.3;
 let showDebug = false;
 
 function persist() {
   try {
     localStorage.setItem(SAVE_KEY, JSON.stringify({
-      seed, time, world: world.serialize(), player: player.serialize(), hotbar: hud.items,
+      seed, world: world.serialize(), player: player.serialize(), hotbar: hud.items,
       ships: ships.map((ship) => ship.serialize()),
     }));
   } catch (e) {
@@ -419,11 +459,12 @@ function stopMining() {
 
 // ---------- ships ----------
 
-// Spawn a small starter deck in front of the player, level with (or just above) their feet
-// and aligned with their current gravity.
-function spawnShip() {
+// The starter ship: a deck of gravity blocks (so you can stand on it in space), a sloped bow,
+// a navigation console, and thrusters for moving, steering, and rolling, already mapped.
+// Forward is -Z; stand at (0, 1, 3) behind the console to fly.
+function buildStarterShip() {
   const ship = new Ship(scene, materials);
-  for (let x = -2; x <= 2; x++) for (let z = -3; z <= 3; z++) ship.setBlock(x, 0, z, B.HULL, { remesh: false });
+  for (let x = -2; x <= 2; x++) for (let z = -3; z <= 3; z++) ship.setBlock(x, 0, z, B.GRAVITY, { remesh: false });
   // A sloped bow so you can tell which way is forward.
   const bow = rotationFor([0, -1, 0], [0, 0, -1]);
   for (let x = -2; x <= 2; x++) ship.setBlock(x, 0, -4, B.HULL_SLOPE, { meta: bow, remesh: false });
@@ -445,6 +486,13 @@ function spawnShip() {
     Q: ['-3,0,1', '3,0,1'], // roll left
     E: ['-3,0,0', '3,0,0'], // roll right
   });
+  return ship;
+}
+
+// Spawn a starter ship in front of the player, level with (or just above) their feet and
+// aligned with their current gravity.
+function spawnShip() {
+  const ship = buildStarterShip();
 
   const forward = tmpA, right = tmpB;
   player.moveBasis(forward, right);
@@ -467,6 +515,47 @@ function spawnShip() {
   }
   ship.dispose();
   hud.toast('No room for a ship here');
+}
+
+// A new game: the player stands on their own ship in open space near the home planet.
+function startNewGame() {
+  const spawn = world.findSpawn();
+  const ship = buildStarterShip();
+  // Point the bow at the home planet.
+  ship.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, -1), new THREE.Vector3(...spawn.toward));
+  ship.position.set(...spawn.position);
+  ship.syncTransform();
+  ship.remeshAll();
+  ships.push(ship);
+  player.boardAt(ship, new THREE.Vector3(0.5, 1.01, 3.5));
+  player.pitch = -0.15;
+  scatterMeteorites(new THREE.Vector3(...spawn.position));
+}
+
+// Meteorites: lumpy rocks of stone and ore drifting and tumbling around the spawn area. They
+// are ships without controls, so they collide, can be mined, and fall into gravity wells.
+function scatterMeteorites(around) {
+  const rand = mulberry32(seed ^ 0xbeef);
+  const ores = [B.STONE, B.STONE, B.COBBLE, B.IRON_ORE, B.COAL_ORE];
+  for (let n = 0; n < METEORITES; n++) {
+    const dir = new THREE.Vector3(rand() * 2 - 1, rand() * 2 - 1, rand() * 2 - 1).normalize();
+    const at = around.clone().addScaledVector(dir, 40 + rand() * 220);
+    if (world.bodies.some((b) => at.distanceTo(new THREE.Vector3(...b.center)) < b.R * 1.6 + 8)) continue;
+    const rock = new Ship(scene, materials);
+    const r = 1.5 + rand() * 2.5;
+    for (let x = -4; x <= 4; x++) for (let y = -4; y <= 4; y++) for (let z = -4; z <= 4; z++) {
+      if (Math.hypot(x, y, z) > r + (rand() - 0.5) * 1.2) continue;
+      rock.setBlock(x, y, z, ores[Math.floor(rand() * ores.length)], { remesh: false });
+    }
+    if (rock.blockCount === 0) continue;
+    rock.position.copy(at);
+    rock.quaternion.setFromEuler(new THREE.Euler(rand() * 6, rand() * 6, rand() * 6));
+    rock.velocity.set(rand() * 2 - 1, rand() * 2 - 1, rand() * 2 - 1).setLength(1.5 + rand() * 4);
+    rock.angularVelocity.set(rand() - 0.5, rand() - 0.5, rand() - 0.5);
+    rock.syncTransform();
+    rock.remeshAll();
+    ships.push(rock);
+  }
 }
 
 function removeShip(ship) {
@@ -492,42 +581,16 @@ function fireThrusters() {
 
 // ---------- sky ----------
 
-const DAY_SKY = new THREE.Color(0x87ceeb);
-const NIGHT_SKY = new THREE.Color(0x0b1026);
-const SUNSET = new THREE.Color(0xf08a4b);
 const WATER_FOG = new THREE.Color(0x1f4a8a);
-const skyColor = new THREE.Color();
 
-function updateSky(dt) {
-  time = (time + dt / DAY_LENGTH) % 1;
-  const angle = time * Math.PI * 2;
-  const sunHeight = Math.sin(angle);
-  const daylight = THREE.MathUtils.smoothstep(sunHeight, -0.25, 0.25);
-  skyColor.copy(NIGHT_SKY).lerp(DAY_SKY, daylight);
-  const dusk = Math.max(0, 1 - Math.abs(sunHeight) * 4) * 0.45;
-  skyColor.lerp(SUNSET, dusk);
-
-  const brightness = 0.22 + 0.78 * daylight;
-  solidMat.color.setScalar(brightness);
-  waterMat.color.setScalar(brightness);
-
-  const dir = new THREE.Vector3(Math.cos(angle), sunHeight, 0.25).normalize();
-  sun.position.copy(camera.position).addScaledVector(dir, 400);
-  moon.position.copy(camera.position).addScaledVector(dir, -400);
-  sun.lookAt(camera.position);
-  moon.lookAt(camera.position);
-
-  if (player.headInWater) {
-    scene.fog.color.copy(WATER_FOG).multiplyScalar(brightness);
-    scene.fog.near = 1;
-    scene.fog.far = 24;
-    scene.background.copy(scene.fog.color);
-  } else {
-    scene.fog.color.copy(skyColor);
-    scene.fog.near = fogFar * 0.55;
-    scene.fog.far = fogFar;
-    scene.background.copy(skyColor);
+function updateSky() {
+  starfield.position.copy(camera.position);
+  for (const { body, mesh } of impostors) {
+    // Hidden once the real blocks around you are loaded.
+    mesh.visible = camera.position.distanceTo(mesh.position) > body.R * 1.4 + 60;
   }
+  scene.fog = player.headInWater ? waterFog : null;
+  scene.background.copy(player.headInWater ? WATER_FOG : SPACE);
   document.getElementById('underwater').classList.toggle('hidden', !player.headInWater);
 }
 
@@ -548,6 +611,8 @@ function frame(now) {
     fireThrusters();
     for (const ship of ships) {
       ship.piloted = player.piloting && player.ref === ship;
+      // Ships out where the world isn't loaded wait, rather than drift through unloaded planets.
+      if (ship !== player.ref && !world.getChunkAt(ship.position.x, ship.position.y, ship.position.z)) continue;
       const impact = ship.update(dt, world, ships);
       if (impact > 4 && ship === player.ref) hud.toast('Collision!');
     }
@@ -574,13 +639,12 @@ function frame(now) {
     if (next <= 0) { act(button); held.set(button, 0.2); } else held.set(button, next);
   }
 
-  updateSky(locked ? dt : 0);
+  updateSky();
   renderer.render(scene, camera);
 
   frames++;
   fpsTimer += dt;
   if (fpsTimer >= 0.5) { fps = Math.round(frames / fpsTimer); frames = 0; fpsTimer = 0; }
-  crackMat.color.copy(solidMat.color);
   if (showDebug) {
     const p = wp;
     const ship = player.ref;
@@ -589,6 +653,7 @@ function frame(now) {
       `XYZ: ${p.x.toFixed(2)} / ${p.y.toFixed(2)} / ${p.z.toFixed(2)}`,
       `Chunk: ${Math.floor(p.x / CS)}, ${Math.floor(p.y / CS)}, ${Math.floor(p.z / CS)}   loaded: ${world.chunks.size}`,
       `Facing: ${target ? `${BLOCKS[target.id].name} @ ${target.x} ${target.y} ${target.z}${target.grid === world ? '' : ' (ship)'}  damage ${Math.round(target.grid.getDamage(target.x, target.y, target.z) * 100)}%` : '-'}`,
+      (() => { const { body, altitude } = world.nearestBody(p); return `Nearest body: ${body.name} (${body.kind}, ${body.R * 2} wide, surface gravity ${Math.round(body.surfaceG * 100)}%)  altitude ${Math.round(altitude)}`; })(),
       `Ships: ${ships.length}   riding: ${ship ? `ship #${ships.indexOf(ship)} (${ship.blockCount} blocks, mass ${ship.mass.toFixed(1)}, ${ship.velocity.length().toFixed(1)} m/s${ship.buoyancy > 0 ? `, ${Math.round(ship.buoyancy * 100)}% submerged` : ''}${ship.sleeping ? ', resting' : ''})` : 'world'}`,
       `Mode: ${player.flying ? 'flying' : player.zeroG ? 'zero-g' : player.inWater ? 'swimming' : 'walking'}   gravity: ${player.gravityLabel()} ${Math.round(player.gravityStrength * 100)}%   seed: ${seed}`,
       `Draw calls: ${renderer.info.render.calls}  tris: ${renderer.info.render.triangles}`,
@@ -602,8 +667,11 @@ function updateStatus() {
   const ship = player.ref;
   let text = '';
   if (!ship || !player.piloting) {
+    const { body, altitude } = world.nearestBody(player.worldPosition(tmpA));
+    const where = altitude < body.range - body.R ? `${body.name}  ·  ` : '';
     if (player.zeroG) text = 'ZERO-G  ·  WASD / Space / Shift jetpack';
-    else if (player.gravityStrength < 0.97 && !player.flying) text = `Gravity ${Math.round(player.gravityStrength * 100)}%`;
+    else if (Math.abs(player.gravityStrength - 1) > 0.03 && !player.flying) text = `${where}Gravity ${Math.round(player.gravityStrength * 100)}%`;
+    else if (where && altitude > 3) text = `${body.name}  ·  altitude ${Math.round(altitude)}`;
   }
   if (ship && player.piloting) {
     text = `AT THE HELM  ${ship.velocity.length().toFixed(1)} m/s  ·  Q W E A S D fire thrusters  ·  R leave the helm`;

@@ -188,6 +188,19 @@ export function createAtlas() {
     put(T.CONSOLE_SIDE, x, y, c);
   });
 
+  // Star matter: churning yellow-white plasma.
+  each((x, y) => {
+    const t = rand();
+    const c = t < 0.2 ? [255, 255, 230] : t < 0.6 ? [255, 214, 90] : [255, 160, 40];
+    put(T.STAR, x, y, c);
+  });
+  // Gravity core: dark crystal with a violet glow.
+  each((x, y) => {
+    const r = Math.max(Math.abs(x - 7.5), Math.abs(y - 7.5));
+    const c = r < 3 ? [230, 180, 255] : (Math.floor(r) % 2 ? [120, 60, 200] : [50, 20, 90]);
+    put(T.CORE, x, y, vary(c, 0.05));
+  });
+
   // Crack overlays: one random crack pattern revealed progressively over the stages.
   const segments = [];
   for (let k = 0; k < 6; k++) {

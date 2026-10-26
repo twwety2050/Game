@@ -1,26 +1,35 @@
-// The static world: terrain generation, chunk streaming, and persisted edits.
+// The static world: a solar system generated from the seed, chunk streaming, and saved edits.
 //
-// The world is infinite on all three axes and stored in cubic chunks. For now the
-// terrain is a finite layer (y = 0 .. TERRAIN_HEIGHT) floating in otherwise empty space.
+// The world is infinite on all three axes and stored in cubic chunks. It is mostly empty
+// space holding a few celestial bodies: a star at the origin and planets around it. Each body
+// is a rounded cube (a superellipsoid) with a noisy, contoured surface and a gravity core at
+// its centre. Bodies pull with full gravity across their whole surface, fading to nothing
+// GRAVITY_REACH blocks above it (see gravity.js).
 import { B } from './blocks.js';
-import { Noise, hash3 } from './noise.js';
+import { Noise, hash3, mulberry32 } from './noise.js';
 import { VoxelGrid, Chunk, CS, CS3, idx } from './grid.js';
 
 export { CS };
-export const TERRAIN_HEIGHT = 96;  // terrain occupies 0 <= y < TERRAIN_HEIGHT
-export const WATER_LEVEL = 30;
-const SNOW_LINE = 64;
-const MARGIN = 2;                  // columns sampled beyond a chunk edge so trees can spill in
-const COL = CS + 2 * MARGIN;
+export const GRAVITY_REACH = 50;  // blocks above a planet's surface where its gravity fades out
+const MEDIUM_PLANET = 20;         // half-size of a planet with normal (100%) surface gravity
+const ROUNDNESS = 4;              // superellipsoid exponent: 2 = sphere, higher = boxier
+
+// Planets: name, kind, half-size (blocks), and orbit radius around the star.
+const PLANETS = [
+  ['Ferrum', 'rocky', 12, 230],
+  ['Gaia', 'verdant', 20, 340],
+  ['Dune', 'desert', 30, 480],
+  ['Rime', 'ice', 20, 640],
+  ['Cinder', 'rocky', 14, 780],
+];
+export const HOME_PLANET = 'Gaia';
 
 export class World extends VoxelGrid {
   constructor(scene, materials, seed, saved = {}, renderDistance = 6) {
     super(scene, materials);
     this.seed = seed;
     this.noise = new Noise(seed);
-    this.caveNoiseA = new Noise(seed + 1);
-    this.caveNoiseB = new Noise(seed + 2);
-    this.columns = new Map(); // cached heightmaps and trees per (cx, cz) column
+    this.bodies = makeBodies(seed);
     this.edits = new Map();  // chunk key -> Map(local index -> block id | meta << 8)
     this.damage = new Map(); // chunk key -> Map(local index -> damage), shared with loaded chunks
     for (const [key, list] of Object.entries(saved.edits ?? {})) this.edits.set(key, new Map(list));
@@ -55,50 +64,30 @@ export class World extends VoxelGrid {
 
   // ---------- generation ----------
 
-  height(x, z) {
+  // How far inside body `b` the block centre (x, y, z) is, in blocks (negative = outside).
+  // The surface is a superellipsoid pushed in and out by noise, so edges are rounded and
+  // faces are gently contoured.
+  depthIn(b, x, y, z) {
+    const dx = x + 0.5 - b.center[0], dy = y + 0.5 - b.center[1], dz = z + 0.5 - b.center[2];
+    const shape = Math.pow(Math.abs(dx) ** ROUNDNESS + Math.abs(dy) ** ROUNDNESS + Math.abs(dz) ** ROUNDNESS, 1 / ROUNDNESS) / b.R;
+    if (shape < 0.85) return (1 - shape) * b.R; // deep inside: skip the noise
+    if (shape > 1.2) return -1;
     const n = this.noise;
-    const continent = n.fbm2(x * 0.0035, z * 0.0035, 4);
-    const hills = n.fbm2(x * 0.015 + 100, z * 0.015 + 100, 4);
-    const mountain = Math.max(0, n.fbm2(x * 0.006 - 300, z * 0.006 - 300, 3) - 0.1);
-    const h = WATER_LEVEL + 2 + continent * 18 + hills * 6 + mountain * mountain * 160;
-    return Math.max(4, Math.min(TERRAIN_HEIGHT - 12, Math.floor(h)));
+    const contour = 1 + 0.07 * n.noise3(x * 0.05 + b.seed, y * 0.05, z * 0.05) + 0.03 * n.noise3(x * 0.14, y * 0.14 + b.seed, z * 0.14);
+    return (contour - shape) * b.R;
   }
 
-  surfaceBlock(h) {
-    if (h <= WATER_LEVEL + 1) return B.SAND;
-    if (h >= SNOW_LINE) return B.SNOW;
-    return B.GRASS;
-  }
-
-  isTree(x, z, h) {
-    if (this.surfaceBlock(h) !== B.GRASS) return false;
-    const forest = this.noise.noise2(x * 0.01 + 500, z * 0.01 + 500);
-    const chance = 0.002 + 0.03 * Math.max(0, forest);
-    return hash3(x, 0, z, this.seed) < chance;
-  }
-
-  // Heightmap and tree list for a column of chunks, shared by every chunk stacked in it.
-  column(cx, cz) {
-    const key = cx + ',' + cz;
-    let col = this.columns.get(key);
-    if (col) return col;
-    const heights = new Int16Array(COL * COL);
-    const trees = [];
-    const ox = cx * CS - MARGIN, oz = cz * CS - MARGIN;
-    for (let z = 0; z < COL; z++) {
-      for (let x = 0; x < COL; x++) {
-        const wx = ox + x, wz = oz + z;
-        const h = this.height(wx, wz);
-        heights[z * COL + x] = h;
-        if (this.isTree(wx, wz, h)) {
-          trees.push({ x: x - MARGIN, z: z - MARGIN, h, trunk: 4 + Math.floor(hash3(wx, 1, wz, this.seed) * 3) });
-        }
-      }
+  // Block at depth d inside body b.
+  material(b, x, y, z, d) {
+    if (b.kind === 'star') return B.STAR;
+    const ore = hash3(x, y, z, this.seed);
+    const stone = ore < (b.kind === 'rocky' ? 0.03 : 0.012) ? B.COAL_ORE : ore < (b.kind === 'rocky' ? 0.05 : 0.02) ? B.IRON_ORE : B.STONE;
+    switch (b.kind) {
+      case 'verdant': return d < 1 ? B.TURF : d < 4 ? B.DIRT : stone;
+      case 'desert': return d < 5 ? B.SAND : stone;
+      case 'ice': return d < 3 ? B.SNOW_BLOCK : stone;
+      default: return d < 1 ? B.COBBLE : stone;
     }
-    col = { heights, trees };
-    this.columns.set(key, col);
-    if (this.columns.size > 1024) this.columns.delete(this.columns.keys().next().value);
-    return col;
   }
 
   generate(c) {
@@ -106,66 +95,28 @@ export class World extends VoxelGrid {
     const key = this.key(c.cx, c.cy, c.cz);
     const edits = this.edits.get(key);
     c.damage = this.damage.get(key) ?? null;
-    const hasTerrain = oy < TERRAIN_HEIGHT && oy + CS > 0;
-    if (!hasTerrain && !edits) return;
+    const bodies = this.bodies.filter((b) => {
+      const reach = b.R * 1.15 + 2;
+      return ox + CS > b.center[0] - reach && ox < b.center[0] + reach &&
+        oy + CS > b.center[1] - reach && oy < b.center[1] + reach &&
+        oz + CS > b.center[2] - reach && oz < b.center[2] + reach;
+    });
+    if (bodies.length === 0 && !edits) return;
 
     const d = new Uint8Array(CS3);
-    const seed = this.seed;
-
-    if (hasTerrain) {
-      const { heights, trees } = this.column(c.cx, c.cz);
-      for (let z = 0; z < CS; z++) {
-        for (let x = 0; x < CS; x++) {
-          const wx = ox + x, wz = oz + z;
-          const h = heights[(z + MARGIN) * COL + x + MARGIN];
-          const surface = this.surfaceBlock(h);
-          const filler = h <= WATER_LEVEL + 1 ? B.SAND : B.DIRT;
-          const caveCeiling = h <= WATER_LEVEL + 3 ? h - 6 : h;
-          const top = Math.min(Math.max(h, WATER_LEVEL), oy + CS - 1);
-          for (let y = Math.max(0, oy); y <= top; y++) {
-            let b;
-            if (y === 0) b = B.BEDROCK;
-            else if (y < h - 3) {
-              b = B.STONE;
-              const r = hash3(wx, y, wz, seed);
-              if (y < 50 && r < 0.012) b = B.COAL_ORE;
-              else if (y < 28 && r < 0.02) b = B.IRON_ORE;
-            } else if (y < h) b = h >= SNOW_LINE ? B.STONE : filler;
-            else if (y === h) b = surface;
-            else b = B.WATER;
-
-            if (b !== B.WATER && y > 2 && y <= caveCeiling) {
-              const a = this.caveNoiseA.noise3(wx * 0.045, y * 0.07, wz * 0.045);
-              if (Math.abs(a) < 0.09) {
-                const bn = this.caveNoiseB.noise3(wx * 0.045, y * 0.07, wz * 0.045);
-                if (Math.abs(bn) < 0.09) b = B.AIR;
-              }
-            }
-            d[idx(x, y - oy, z)] = b;
+    for (const b of bodies) {
+      const reach = b.R * 1.15 + 2;
+      const x0 = Math.max(ox, Math.floor(b.center[0] - reach)), x1 = Math.min(ox + CS, Math.ceil(b.center[0] + reach));
+      const y0 = Math.max(oy, Math.floor(b.center[1] - reach)), y1 = Math.min(oy + CS, Math.ceil(b.center[1] + reach));
+      const z0 = Math.max(oz, Math.floor(b.center[2] - reach)), z1 = Math.min(oz + CS, Math.ceil(b.center[2] + reach));
+      for (let y = y0; y < y1; y++) {
+        for (let z = z0; z < z1; z++) {
+          for (let x = x0; x < x1; x++) {
+            const depth = this.depthIn(b, x, y, z);
+            if (depth < 0) continue;
+            const core = x === b.center[0] && y === b.center[1] && z === b.center[2];
+            d[idx(x - ox, y - oy, z - oz)] = core ? B.GRAVITY_CORE : this.material(b, x, y, z, depth);
           }
-        }
-      }
-
-      // Trees, including canopies spilling in from neighbouring columns.
-      const inside = (x, y, z) => x >= 0 && x < CS && z >= 0 && z < CS && y >= 0 && y < CS;
-      for (const t of trees) {
-        const wx = ox + t.x, wz = oz + t.z;
-        for (let dy = t.trunk - 2; dy <= t.trunk + 1; dy++) {
-          const r = dy >= t.trunk ? 1 : 2;
-          for (let dz = -r; dz <= r; dz++) {
-            for (let dx = -r; dx <= r; dx++) {
-              if (r === 2 && Math.abs(dx) === 2 && Math.abs(dz) === 2 && hash3(wx + dx, dy, wz + dz, seed) < 0.6) continue;
-              if (dy === t.trunk + 1 && Math.abs(dx) + Math.abs(dz) > 1) continue;
-              const lx = t.x + dx, ly = t.h + dy - oy, lz = t.z + dz;
-              if (!inside(lx, ly, lz)) continue;
-              const i = idx(lx, ly, lz);
-              if (d[i] === B.AIR) d[i] = B.LEAVES;
-            }
-          }
-        }
-        for (let dy = 0; dy <= t.trunk; dy++) {
-          const ly = t.h + dy - oy;
-          if (inside(t.x, ly, t.z)) d[idx(t.x, ly, t.z)] = dy === 0 ? B.DIRT : B.LOG;
         }
       }
     }
@@ -178,19 +129,36 @@ export class World extends VoxelGrid {
         if (c.meta) c.meta[i] = meta;
       }
     }
-    if (d.some((b) => b !== B.AIR)) c.data = d;
+    if (d.some((v) => v !== B.AIR)) c.data = d;
   }
 
-  findSpawn() {
-    for (let r = 0; r < 400; r += 4) {
-      for (let a = 0; a < 16; a++) {
-        const x = Math.round(Math.cos((a / 16) * Math.PI * 2) * r);
-        const z = Math.round(Math.sin((a / 16) * Math.PI * 2) * r);
-        const h = this.height(x, z);
-        if (h > WATER_LEVEL + 1 && h < SNOW_LINE) return { x: x + 0.5, y: h + 1, z: z + 0.5 };
-      }
+  bodyNamed(name) {
+    return this.bodies.find((b) => b.name === name);
+  }
+
+  // The body whose gravity you're in (or nearest to), with your altitude above its surface.
+  nearestBody(p) {
+    let best = null, bestAlt = Infinity;
+    for (const b of this.bodies) {
+      const alt = Math.hypot(p.x - b.center[0], p.y - b.center[1], p.z - b.center[2]) - b.R;
+      if (alt < bestAlt) { bestAlt = alt; best = b; }
     }
-    return { x: 0.5, y: TERRAIN_HEIGHT, z: 0.5 };
+    return { body: best, altitude: bestAlt };
+  }
+
+  // Where a new player starts: in open space just beyond the home planet's gravity, on the
+  // side facing away from the star, so both are in view. Returns the point and the direction
+  // toward the planet.
+  findSpawn() {
+    const home = this.bodyNamed(HOME_PLANET);
+    const out = [home.center[0], home.center[1], home.center[2]];
+    const len = Math.hypot(...out) || 1;
+    const dir = out.map((v) => v / len);
+    const dist = home.range + 20;
+    return {
+      position: out.map((v, i) => v + dir[i] * dist),
+      toward: dir.map((v) => -v),
+    };
   }
 
   // Remember every edit so chunks regenerate with it after being unloaded.
@@ -248,4 +216,28 @@ export class World extends VoxelGrid {
     }
     return true;
   }
+}
+
+// The star and planets for a seed. Gravity: each body pulls at `surfaceG` (1 = normal) out to
+// `full` blocks from its centre (just past its furthest surface point), fading to nothing at
+// `range`. Surface gravity scales with size, like real planets of the same density.
+function makeBodies(seed) {
+  const rand = mulberry32(seed ^ 0x5eed);
+  const body = (name, kind, R, center) => {
+    // Distance to the furthest surface point (a corner, pushed out by the contours).
+    const full = Math.ceil(R * Math.pow(3, 1 / 2 - 1 / ROUNDNESS) * 1.1) + 2;
+    return {
+      name, kind, R, center, seed: rand() * 1000,
+      surfaceG: kind === 'star' ? 2 : R / MEDIUM_PLANET,
+      full,
+      range: full + (kind === 'star' ? 3 * GRAVITY_REACH : GRAVITY_REACH),
+    };
+  };
+  const bodies = [body('Sol', 'star', 36, [0, 0, 0])];
+  for (const [name, kind, R, orbit] of PLANETS) {
+    const angle = rand() * Math.PI * 2;
+    const y = Math.round((rand() - 0.5) * 60);
+    bodies.push(body(name, kind, R, [Math.round(Math.cos(angle) * orbit), y, Math.round(Math.sin(angle) * orbit)]));
+  }
+  return bodies;
 }
