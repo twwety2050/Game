@@ -477,7 +477,8 @@ export class Player {
     _v.copy(this.pos).addScaledVector(up, 0.4).floor();
     this.inWater = BLOCKS[grid.getBlock(_v.x, _v.y, _v.z)].liquid;
     _v.copy(this.pos).addScaledVector(up, EYE).floor();
-    this.headInWater = BLOCKS[grid.getBlock(_v.x, _v.y, _v.z)].liquid;
+    this.headFluid = grid.getBlock(_v.x, _v.y, _v.z);
+    this.headInWater = BLOCKS[this.headFluid].liquid;
 
     if (this.zeroG && !this.inWater) this.jetpack(dt);
     else this.walk(dt);

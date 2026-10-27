@@ -21,9 +21,12 @@ Any static file server works (`npx serve`, VS Code Live Server, GitHub Pages, â€
 - Every planet has a gravity core: full gravity across its surface (normal on a medium planet, weaker on small
   ones, stronger on large ones), fading to nothing about 50 blocks up
 - You start on your own small ship, floating near the home planet
+- Water and lava follow Minecraft's flow rules (sources, levels, falling, infinite water, lava hardening into
+  obsidian, cobblestone, or stone) but flow toward the local gravity, so they pool on every face of a planet
+  and pour over its edges. Gaia has seas, volcanic Cinder has lava seas, and ships float in either
 - Procedurally painted pixel-art textures (no image files)
 - Face-culled chunk meshes with smooth ambient occlusion
-- Translucent water you can swim in, with an underwater fog effect
+- Translucent water you can swim in, with an underwater fog effect (and a molten one in lava)
 - Walking, sprinting, jumping, flying, and AABB collision
 - Gravity generators: a full block that pulls toward itself from every side (build a mini planet), and plates
   and slopes that pull toward their base. Full strength near them (jumping feels normal), fading to nothing
@@ -76,6 +79,7 @@ Any static file server works (`npx serve`, VS Code Live Server, GitHub Pages, â€
 | `src/ship.js` | Ships: rigid-body grids with gravity, buoyancy, collisions, and thrusters |
 | `src/console.js` | The navigation console screen (thruster-to-key mapping) |
 | `src/gravity.js` | The gravity field from generator blocks and celestial bodies |
+| `src/fluids.js` | Water and lava flow along the local gravity |
 | `src/player.js` | First-person movement, collision, gravity frame, zero-g, and riding ships |
 | `src/blocks.js` | Block definitions (hardness, shape, permanent damage) |
 | `src/shapes.js` | Block shapes (slabs, plates, slopes): geometry, collision boxes, 24 orientations |

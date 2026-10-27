@@ -300,15 +300,27 @@ export class Ship extends VoxelGrid {
     return 1 / this.mass + n.dot(_v.crossVectors(rn, _r));
   }
 
-  // How much of a block centred at world point p (unit height) is under water.
-  submergedFraction(world, p) {
-    const x = Math.floor(p.x), z = Math.floor(p.z);
-    const bottom = p.y - 0.5, top = p.y + 0.5;
+  // How much fluid a unit block centred at world point p displaces, weighted by the fluid's
+  // density (water 1, lava 3). "Up" is world axis `axis` in direction `sign` (+1 or -1), so
+  // this works on any face of a planet.
+  submergedFraction(world, p, axis, sign) {
+    const c = [Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)];
+    const along = p.getComponent(axis);
+    const bottom = along - 0.5, top = along + 0.5;
     let wet = 0;
-    for (let y = Math.floor(bottom); y <= Math.floor(top); y++) {
-      if (world.getBlock(x, y, z) !== B.WATER) continue;
-      const surface = y + (world.getBlock(x, y + 1, z) === B.WATER ? 1 : WATER_SURFACE);
-      wet += Math.max(0, Math.min(top, surface) - Math.max(bottom, y));
+    for (let k = Math.floor(bottom); k <= Math.floor(top); k++) {
+      c[axis] = k;
+      const id = world.getBlock(c[0], c[1], c[2]);
+      if (!BLOCKS[id].liquid) continue;
+      // The fluid fills its block from the "down" side up to its surface height.
+      c[axis] = k + sign;
+      const covered = world.getBlock(c[0], c[1], c[2]) === id;
+      c[axis] = k;
+      const meta = world.getMeta(c[0], c[1], c[2]);
+      const level = meta & 7;
+      const height = covered || meta & 8 ? 1 : level === 0 ? WATER_SURFACE : Math.max(0.15, (8 - level) / 9);
+      const lo = sign > 0 ? k : k + 1 - height, hi = sign > 0 ? k + height : k + 1;
+      wet += Math.max(0, Math.min(top, hi) - Math.max(bottom, lo)) * BLOCKS[id].density;
     }
     return wet;
   }
@@ -324,15 +336,19 @@ export class Ship extends VoxelGrid {
     this.buoyancy = 0;
     if (this.gravity.lengthSq() < 1e-8) return;
     const blocks = this.blocks;
+    // "Up" is the axis most opposed to gravity (fluids lie flat across it).
+    const g = this.gravity, agx = Math.abs(g.x), agy = Math.abs(g.y), agz = Math.abs(g.z);
+    const axis = agx >= agy && agx >= agz ? 0 : agy >= agz ? 1 : 2;
+    const sign = -Math.sign(g.getComponent(axis));
     let wetVolume = 0, volume = 0;
     for (let i = 0; i < blocks.length; i += 4) {
       const v = BLOCKS[blocks[i + 3]].mass / BLOCKS[blocks[i + 3]].density;
       volume += v;
       const p = this.localToWorld(_v.set(blocks[i] + 0.5, blocks[i + 1] + 0.5, blocks[i + 2] + 0.5), _w);
-      const wet = this.submergedFraction(world, p);
+      const wet = this.submergedFraction(world, p, axis, sign);
       if (wet === 0) continue;
       wetVolume += wet * v;
-      _j.copy(this.gravity).multiplyScalar(-G * wet * v); // water density is 1
+      _j.copy(this.gravity).multiplyScalar(-G * wet * v); // `wet` already includes fluid density
       this.buoyancyForce.add(_j);
       _r.subVectors(p, this.position);
       this.buoyancyTorque.add(_t.crossVectors(_r, _j));

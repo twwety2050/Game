@@ -309,6 +309,17 @@ export class VoxelGrid {
 
   onBlockChanged() {}
 
+  // Mark the chunk holding (x, y, z), and any neighbour chunk it borders, for remeshing.
+  markDirtyAround(x, y, z) {
+    const cx = Math.floor(x / CS), cy = Math.floor(y / CS), cz = Math.floor(z / CS);
+    const lx = x - cx * CS, ly = y - cy * CS, lz = z - cz * CS;
+    const near = (l) => (l === 0 ? [0, -1] : l === CS - 1 ? [0, 1] : [0]);
+    for (const dx of near(lx)) for (const dy of near(ly)) for (const dz of near(lz)) {
+      const c = this.chunks.get(this.key(cx + dx, cy + dy, cz + dz));
+      if (c) c.dirty = true;
+    }
+  }
+
   // ---------- gravity sources ----------
 
   indexGravity(x, y, z, id, meta) {
@@ -434,7 +445,20 @@ export class VoxelGrid {
           if (b === B.AIR) continue;
           const liquid = LIQUID[b], opaque = OPAQUE[b];
           const def = BLOCKS[b];
-          const lowerTop = liquid && pad[p + PY] !== B.WATER;
+          // A fluid's surface sits below the top of its block (lower the further it has flowed),
+          // on whichever side is "up" for it, unless more of the same fluid is above it.
+          let surfaceAxis = -1, surfaceSide = 0, surfaceDrop = 0;
+          if (liquid) {
+            const m = padMeta[p], down = (m >> 4) & 7;
+            if (down < 6 && pad[p + FACES[down ^ 1].offset] !== b) {
+              const level = m & 7;
+              const height = m & 8 ? 1 : level === 0 ? 0.88 : Math.max(0.15, (8 - level) / 9);
+              const up = down ^ 1;
+              surfaceAxis = up >> 1;
+              surfaceSide = up & 1;                       // the corner coordinate on the up side
+              surfaceDrop = (1 - height) * (up & 1 ? -1 : 1);
+            }
+          }
           const dmg = damage ? damage.get(i) ?? 0 : 0;
 
           if (SHAPE_OF[b] !== SHAPE.FULL) {
@@ -455,7 +479,7 @@ export class VoxelGrid {
             const q = p + f.offset;
             const nb = pad[q];
             let visible;
-            if (liquid) visible = !OPAQUE[nb] && !LIQUID[nb] && !(SOLID[nb] && f.dir[1] === 0);
+            if (liquid) visible = !covers(nb, padMeta[q], fi ^ 1) && !LIQUID[nb];
             else if (opaque) visible = !covers(nb, padMeta[q], fi ^ 1);
             else visible = !covers(nb, padMeta[q], fi ^ 1) && (nb !== b || SELF_FACES[b]);
             if (!visible) continue;
@@ -463,12 +487,16 @@ export class VoxelGrid {
             const dy = f.dir[1];
             const tile = dy === 1 ? def.top : dy === -1 ? def.bottom : def.side;
             const tu = tile % ATLAS, tv = Math.floor(tile / ATLAS);
-            const g = liquid ? water : solid;
+            const g = def.translucent ? water : solid;
             const base = g.count;
 
             for (let k = 0; k < 4; k++) {
               const corner = f.corners[k];
-              g.pos.push(x + corner.x, y + corner.y - (lowerTop && corner.y === 1 ? 0.12 : 0), z + corner.z);
+              let cx = corner.x, cy = corner.y, cz = corner.z;
+              if (surfaceAxis === 0 && cx === surfaceSide) cx += surfaceDrop;
+              else if (surfaceAxis === 1 && cy === surfaceSide) cy += surfaceDrop;
+              else if (surfaceAxis === 2 && cz === surfaceSide) cz += surfaceDrop;
+              g.pos.push(x + cx, y + cy, z + cz);
               g.uv.push((tu + corner.u) / ATLAS, 1 - (tv + 1 - corner.v) / ATLAS);
               let ao = 3;
               if (!liquid) {

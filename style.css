@@ -32,6 +32,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #000; font-f
 }
 
 #underwater { position: fixed; inset: 0; background: rgba(30, 70, 160, 0.35); pointer-events: none; }
+#underwater.lava { background: rgba(230, 80, 10, 0.6); }
 
 #menu { position: fixed; inset: 0; display: grid; place-items: center; background: rgba(0, 0, 0, 0.55); padding: 16px; }
 .panel { width: min(420px, 100%); color: #fff; text-align: center; }

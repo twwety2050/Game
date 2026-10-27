@@ -201,6 +201,18 @@ export function createAtlas() {
     put(T.CORE, x, y, vary(c, 0.05));
   });
 
+  // Lava: bright molten swirls with darker cooling crust.
+  each((x, y) => {
+    const v = Math.sin(x * 0.9 + Math.sin(y * 0.7) * 2) + Math.sin(y * 0.8 + x * 0.3);
+    const c = v > 0.9 ? [255, 230, 120] : v > 0 ? [250, 130, 30] : v > -0.8 ? [200, 60, 15] : [110, 30, 10];
+    put(T.LAVA, x, y, vary(c, 0.05));
+  });
+  // Obsidian: near-black glass with purple glints.
+  each((x, y) => {
+    const r = rand();
+    put(T.OBSIDIAN, x, y, r < 0.08 ? [90, 60, 130] : r < 0.4 ? [30, 20, 45] : [18, 12, 28]);
+  });
+
   // Crack overlays: one random crack pattern revealed progressively over the stages.
   const segments = [];
   for (let k = 0; k < 6; k++) {

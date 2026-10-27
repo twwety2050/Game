@@ -8,11 +8,16 @@
 import { B } from './blocks.js';
 import { Noise, hash3, mulberry32 } from './noise.js';
 import { VoxelGrid, Chunk, CS, CS3, idx } from './grid.js';
+import { encodeFluid } from './fluids.js';
+import { dirIndex } from './shapes.js';
 
 export { CS };
 export const GRAVITY_REACH = 50;  // blocks above a planet's surface where its gravity fades out
 const MEDIUM_PLANET = 20;         // half-size of a planet with normal (100%) surface gravity
 const ROUNDNESS = 4;              // superellipsoid exponent: 2 = sphere, higher = boxier
+// Seas: which fluid fills each kind of planet's low ground, and how high (as a fraction of
+// the planet's half-size, measured straight out from each face).
+const SEAS = { verdant: [B.WATER, 0.965], volcanic: [B.LAVA, 0.95] };
 
 // Planets: name, kind, half-size (blocks), and orbit radius around the star.
 const PLANETS = [
@@ -20,7 +25,7 @@ const PLANETS = [
   ['Gaia', 'verdant', 20, 340],
   ['Dune', 'desert', 30, 480],
   ['Rime', 'ice', 20, 640],
-  ['Cinder', 'rocky', 14, 780],
+  ['Cinder', 'volcanic', 14, 780],
 ];
 export const HOME_PLANET = 'Gaia';
 
@@ -86,8 +91,24 @@ export class World extends VoxelGrid {
       case 'verdant': return d < 1 ? B.TURF : d < 4 ? B.DIRT : stone;
       case 'desert': return d < 5 ? B.SAND : stone;
       case 'ice': return d < 3 ? B.SNOW_BLOCK : stone;
+      case 'volcanic': return d < 1 ? (ore < 0.3 ? B.OBSIDIAN : B.COBBLE) : stone;
       default: return d < 1 ? B.COBBLE : stone;
     }
+  }
+
+  // If (x, y, z) is above body b's ground but below its sea level, the sea's fluid and its
+  // meta (a source whose "down" points into the face it lies on); else null. The sea surface
+  // is flat on each face of the planet.
+  seaAt(b, x, y, z) {
+    const sea = SEAS[b.kind];
+    if (!sea) return null;
+    const dx = x + 0.5 - b.center[0], dy = y + 0.5 - b.center[1], dz = z + 0.5 - b.center[2];
+    const ax = Math.abs(dx), ay = Math.abs(dy), az = Math.abs(dz);
+    if (Math.max(ax, ay, az) > b.R * sea[1]) return null;
+    // Stay within the planet's rounded outline, so seas don't spill off its edges.
+    if (Math.pow(ax ** ROUNDNESS + ay ** ROUNDNESS + az ** ROUNDNESS, 1 / ROUNDNESS) > b.R) return null;
+    const down = ax >= ay && ax >= az ? dirIndex(-Math.sign(dx), 0, 0) : ay >= az ? dirIndex(0, -Math.sign(dy), 0) : dirIndex(0, 0, -Math.sign(dz));
+    return [sea[0], encodeFluid(0, false, down)];
   }
 
   generate(c) {
@@ -113,7 +134,15 @@ export class World extends VoxelGrid {
         for (let z = z0; z < z1; z++) {
           for (let x = x0; x < x1; x++) {
             const depth = this.depthIn(b, x, y, z);
-            if (depth < 0) continue;
+            if (depth < 0) {
+              const sea = this.seaAt(b, x, y, z);
+              if (!sea) continue;
+              const i = idx(x - ox, y - oy, z - oz);
+              d[i] = sea[0];
+              if (!c.meta) c.meta = new Uint8Array(CS3);
+              c.meta[i] = sea[1];
+              continue;
+            }
             const core = x === b.center[0] && y === b.center[1] && z === b.center[2];
             d[idx(x - ox, y - oy, z - oz)] = core ? B.GRAVITY_CORE : this.material(b, x, y, z, depth);
           }
@@ -162,10 +191,11 @@ export class World extends VoxelGrid {
   }
 
   // Remember every edit so chunks regenerate with it after being unloaded.
-  onBlockChanged(_x, _y, _z, _old, id, key, i, meta) {
+  onBlockChanged(x, y, z, _old, id, key, i, meta) {
     let e = this.edits.get(key);
     if (!e) { e = new Map(); this.edits.set(key, e); }
     e.set(i, id | (meta << 8));
+    this.onEdit?.(x, y, z); // lets the fluids react
   }
 
   onDamageMapCreated(key, map) {

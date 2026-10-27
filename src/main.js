@@ -7,6 +7,7 @@ import { VoxelGrid, crackStage } from './grid.js';
 import { SHAPE, rotationFor, applyRotation, DIRS } from './shapes.js';
 import { Ship, CONTROL_KEYS } from './ship.js';
 import { NavConsoleUI } from './console.js';
+import { Fluids, encodeFluid, NO_DOWN } from './fluids.js';
 import { Player } from './player.js';
 import { Hud } from './hud.js';
 
@@ -114,7 +115,7 @@ function renderBlockIcons() {
     if (!def || def.id === B.AIR) continue;
     const grid = new VoxelGrid(iconScene, iconMaterials);
     grid.createChunks = true;
-    grid.setBlock(0, 0, 0, def.id, { remesh: false });
+    grid.setBlock(0, 0, 0, def.id, { meta: def.liquid ? encodeFluid(0, false, NO_DOWN) : 0, remesh: false });
     const chunk = grid.getChunkAt(0, 0, 0);
     grid.buildMesh(chunk);
     renderer.setRenderTarget(target);
@@ -143,11 +144,12 @@ function renderBlockIcons() {
 const world = new World(scene, materials, seed, save?.world ?? {}, RENDER_DISTANCE);
 const ships = (save?.ships ?? []).map((data) => Ship.deserialize(data, scene, materials));
 const player = new Player(camera, world, ships);
+const fluids = new Fluids(world, ships);
 
 // Far-away stand-ins for the star and planets, so they're visible across the system before
 // their blocks load. Each is the body's rounded-cube shape, slightly inside the real surface,
 // and is hidden once you're close enough for the real blocks to be loaded around you.
-const BODY_COLORS = { star: [1, 0.8, 0.35], verdant: [0.35, 0.6, 0.22], desert: [0.85, 0.78, 0.52], ice: [0.92, 0.96, 1], rocky: [0.48, 0.47, 0.46] };
+const BODY_COLORS = { star: [1, 0.8, 0.35], verdant: [0.35, 0.6, 0.22], desert: [0.85, 0.78, 0.52], ice: [0.92, 0.96, 1], rocky: [0.48, 0.47, 0.46], volcanic: [0.32, 0.16, 0.12] };
 const impostors = world.bodies.map((b) => {
   const g = new THREE.SphereGeometry(1, 64, 48);
   const pos = g.attributes.position, colors = [];
@@ -367,7 +369,11 @@ function act(button) {
     if (existing !== B.AIR && !BLOCKS[existing].liquid) return;
     const id = hud.current;
     if (BLOCKS[id].solid && player.overlapsBlock(grid, x, y, z)) return;
-    grid.setBlock(x, y, z, id, { meta: placementRotation(id, grid) });
+    // Fluids flow toward the local "down" (only in the world; on a ship they stay put).
+    const meta = BLOCKS[id].liquid
+      ? (grid === world ? fluids.sourceMeta(x, y, z) : encodeFluid(0, false, NO_DOWN))
+      : placementRotation(id, grid);
+    grid.setBlock(x, y, z, id, { meta });
   } else if (button === 1) {
     hud.setItem(target.id);
   }
@@ -582,6 +588,8 @@ function fireThrusters() {
 // ---------- sky ----------
 
 const WATER_FOG = new THREE.Color(0x1f4a8a);
+const LAVA_FOG = new THREE.Color(0xc0400c);
+const lavaFog = new THREE.Fog(LAVA_FOG, 0.2, 3);
 
 function updateSky() {
   starfield.position.copy(camera.position);
@@ -589,9 +597,12 @@ function updateSky() {
     // Hidden once the real blocks around you are loaded.
     mesh.visible = camera.position.distanceTo(mesh.position) > body.R * 1.4 + 60;
   }
-  scene.fog = player.headInWater ? waterFog : null;
-  scene.background.copy(player.headInWater ? WATER_FOG : SPACE);
-  document.getElementById('underwater').classList.toggle('hidden', !player.headInWater);
+  const inLava = player.headFluid === B.LAVA;
+  scene.fog = !player.headInWater ? null : inLava ? lavaFog : waterFog;
+  scene.background.copy(!player.headInWater ? SPACE : inLava ? LAVA_FOG : WATER_FOG);
+  const tint = document.getElementById('underwater');
+  tint.classList.toggle('hidden', !player.headInWater);
+  tint.classList.toggle('lava', inLava);
 }
 
 // ---------- main loop ----------
@@ -606,6 +617,7 @@ function frame(now) {
 
   const wp = player.worldPosition(new THREE.Vector3());
   world.update(wp.x, wp.y, wp.z, 8);
+  if (locked) fluids.tick(dt);
 
   if (locked) {
     fireThrusters();
@@ -684,4 +696,4 @@ function updateStatus() {
 }
 
 // Exposed for debugging from the browser console.
-window.game = { world, ships, player, hud, camera, renderer, spawnShip, removeShip, navConsole, useConsole, fireThrusters, getHelm: () => helm, setTarget: (t) => { target = t; } };
+window.game = { world, ships, player, hud, camera, renderer, fluids, spawnShip, removeShip, navConsole, useConsole, fireThrusters, getHelm: () => helm, setTarget: (t) => { target = t; } };

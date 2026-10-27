@@ -7,14 +7,14 @@ export const B = {
   HULL: 16, HULL_SLAB: 17, HULL_PLATE: 18, HULL_SLOPE: 19, HULL_SLOPE_LOW: 20, HULL_SLOPE_HIGH: 21,
   GRAVITY: 22, GRAVITY_SLAB: 23, GRAVITY_SLOPE: 24, GRAVITY_SLOPE_LOW: 25, GRAVITY_SLOPE_HIGH: 26,
   THRUSTER: 27, NAV_CONSOLE: 28,
-  TURF: 29, SNOW_BLOCK: 30, STAR: 31, GRAVITY_CORE: 32,
+  TURF: 29, SNOW_BLOCK: 30, STAR: 31, GRAVITY_CORE: 32, LAVA: 33, OBSIDIAN: 34,
 };
 
 export const T = {
   GRASS_TOP: 0, GRASS_SIDE: 1, DIRT: 2, STONE: 3, SAND: 4, LOG_SIDE: 5, LOG_TOP: 6, LEAVES: 7,
   PLANKS: 8, COBBLE: 9, GLASS: 10, WATER: 11, BEDROCK: 12, BRICK: 13, SNOW: 14, SNOW_SIDE: 15,
   COAL_ORE: 16, IRON_ORE: 17, HULL: 18, GRAVITY: 19, GRAVITY_SIDE: 20,
-  THRUSTER_SIDE: 21, THRUSTER_NOZZLE: 22, CONSOLE_SCREEN: 23, CONSOLE_SIDE: 32, STAR: 33, CORE: 34,
+  THRUSTER_SIDE: 21, THRUSTER_NOZZLE: 22, CONSOLE_SCREEN: 23, CONSOLE_SIDE: 32, STAR: 33, CORE: 34, LAVA: 35, OBSIDIAN: 36,
   CRACK: 24, // 8 crack stages: tiles 24..31
 };
 export const CRACK_STAGES = 8;
@@ -47,6 +47,7 @@ function def(id, name, tex, opts = {}) {
     mass: (opts.density ?? 1) * shapeVolume(opts.shape ?? SHAPE.FULL),
     thruster: opts.thruster ?? false, // pushes its ship away from its nozzle when fired
     console: opts.console ?? false,   // navigation console: maps keys to thrusters
+    translucent: opts.translucent ?? false, // drawn see-through (water)
   };
 }
 
@@ -60,7 +61,8 @@ def(B.LEAVES, 'Oak Leaves', { all: T.LEAVES }, { opaque: false, selfFaces: true,
 def(B.PLANKS, 'Oak Planks', { all: T.PLANKS }, { hardness: 1.0, density: 0.6 });
 def(B.COBBLE, 'Cobblestone', { all: T.COBBLE }, { hardness: 1.5, density: 2.2 });
 def(B.GLASS, 'Glass', { all: T.GLASS }, { opaque: false, hardness: 0.3, density: 1.5 });
-def(B.WATER, 'Water', { all: T.WATER }, { solid: false, opaque: false, liquid: true, breakable: false, placeable: false });
+// Fluids. Their meta byte holds their flow state (see fluids.js), not a rotation.
+def(B.WATER, 'Water Source', { all: T.WATER }, { solid: false, opaque: false, liquid: true, translucent: true, breakable: false, density: 1 });
 def(B.BEDROCK, 'Bedrock', { all: T.BEDROCK }, { breakable: false, placeable: false });
 def(B.BRICK, 'Bricks', { all: T.BRICK }, { hardness: 1.5, density: 2.0 });
 def(B.SNOW, 'Snowy Grass', { top: T.SNOW, side: T.SNOW_SIDE, bottom: T.DIRT }, { hardness: 0.6, density: 1.5 });
@@ -73,6 +75,9 @@ def(B.SNOW_BLOCK, 'Snow', { all: T.SNOW }, { hardness: 0.4, density: 0.9 });
 def(B.STAR, 'Star Matter', { all: T.STAR }, { hardness: 6, density: 1.4 });
 // Sits at the heart of every planet; the planet's gravity is centred on it.
 def(B.GRAVITY_CORE, 'Gravity Core', { all: T.CORE }, { breakable: false, placeable: false, density: 8 });
+
+def(B.LAVA, 'Lava Source', { all: T.LAVA }, { solid: false, opaque: false, liquid: true, breakable: false, density: 3 });
+def(B.OBSIDIAN, 'Obsidian', { all: T.OBSIDIAN }, { hardness: 10, density: 2.4 });
 
 // Ship hull: thin metal plating around a light frame (so hulls float), with permanent damage.
 const hull = (shape) => ({ shape, hardness: 4, permanentDamage: true, density: 0.5 });
