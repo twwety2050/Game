@@ -12,12 +12,15 @@ and an internet connection (Three.js loads from a CDN).
 The `tools/play` scripts serve the game and check GitHub every 30 seconds, pulling new versions as they're pushed.
 When it says "Updated", refresh your browser.
 
-**Windows:** clone once, then double-click `tools\play.bat` (or run it from a terminal):
+**Windows:** clone once (in PowerShell, which Windows Terminal opens by default), then double-click
+`VoxelCraft\tools\play.bat` in File Explorer whenever you want to play, or run it from the terminal:
 
-```bat
-git clone -b claude/minecraft-clone-3mer7c https://github.com/twwety2050/Game.git %USERPROFILE%\VoxelCraft
-%USERPROFILE%\VoxelCraft\tools\play.bat
+```powershell
+git clone -b claude/minecraft-clone-3mer7c https://github.com/twwety2050/Game.git "$HOME\VoxelCraft"
+& "$HOME\VoxelCraft\tools\play.bat"
 ```
+
+(In the older Command Prompt, write `%USERPROFILE%\VoxelCraft` instead of `"$HOME\VoxelCraft"`.)
 
 **macOS / Linux:**
 
