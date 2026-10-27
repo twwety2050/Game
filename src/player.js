@@ -31,9 +31,12 @@ const TURN_TIME = 0.45;       // seconds to reorient after gravity changes
 const SPHERES = [HALF, HEIGHT / 2, HEIGHT - HALF]; // capsule sphere heights above the feet
 const SHIP_EXIT_MARGIN = 1.5; // how far outside a ship's bounds you can drift before leaving it
 const STEP_HEIGHT = 0.55;     // ledges up to this high (slabs, slopes) are walked up automatically
-const ZERO_G = 0.03;          // gravity strength below which you float freely
-const JET_ACCEL = 6;          // zero-g jetpack thrust, blocks/s^2
-const JET_MAX_SPEED = 9;
+const ZERO_G = 0.15;          // below this gravity strength your jetpack takes over from walking
+const ORIENT_MIN = 0.03;      // below this there's no clear "down" to turn toward
+const JET_ACCEL = 6;          // jetpack thrust, blocks/s^2
+const JET_MAX_SPEED = 9;      // the jetpack won't push you faster than this (momentum can)
+const AIR_ACCEL = 4;          // how hard you can steer while airborne
+const MAX_SPEED = 60;
 const REORIENT_BIAS = 1.2;    // a new "down" must be this much stronger than the current one
 
 const AXES = ['x', 'y', 'z'];
@@ -132,7 +135,7 @@ export class Player {
     gravityAt(centre, this.world, this.ships, _d);
     this.grid.dirToLocal(_d, this.gravity);
     this.gravityStrength = this.gravity.length();
-    if (this.gravityStrength < ZERO_G || this.flying || this.turn) return;
+    if (this.gravityStrength < ORIENT_MIN || this.flying || this.turn) return;
     const want = nearestAxis(_c.copy(this.gravity).negate());
     if (want.equals(this.up)) return;
     const pullWant = -this.gravity.dot(want), pullNow = -this.gravity.dot(this.up);
@@ -487,7 +490,8 @@ export class Player {
     this.syncCamera(dt);
   }
 
-  // Free-floating movement: thrust along the view direction; momentum carries you.
+  // Low-gravity movement: thrust along the view direction. Nothing slows you down; whatever
+  // gravity there is keeps pulling.
   jetpack(dt) {
     const k = this.keys;
     const view = this.viewQuaternion(_q1);
@@ -500,12 +504,16 @@ export class Player {
       if (k.has('Space')) thrust.y += 1;
       if (k.has('ShiftLeft') || k.has('ShiftRight')) thrust.y -= 1;
     }
-    if (thrust.lengthSq() > 0) {
-      this.vel.addScaledVector(thrust.normalize().applyQuaternion(view), JET_ACCEL * dt);
-      if (this.vel.length() > JET_MAX_SPEED) this.vel.setLength(JET_MAX_SPEED);
-    } else {
-      this.vel.multiplyScalar(Math.exp(-0.3 * dt)); // gentle suit stabilisers
-    }
+    if (thrust.lengthSq() > 0) this.thrustToward(thrust.normalize().applyQuaternion(view), JET_ACCEL * dt, JET_MAX_SPEED);
+    this.vel.addScaledVector(this.gravity, GRAVITY * dt);
+    if (this.vel.length() > MAX_SPEED) this.vel.setLength(MAX_SPEED);
+  }
+
+  // Accelerate along unit direction `dir` by `dv`, but only while slower than `limit` in that
+  // direction: thrust can't push you past it, though momentum you already have is kept.
+  thrustToward(dir, dv, limit) {
+    const along = this.vel.dot(dir);
+    if (along < limit) this.vel.addScaledVector(dir, Math.min(dv, limit - along));
   }
 
   // Walking, swimming, and flying in the gravity frame.
@@ -537,10 +545,18 @@ export class Player {
     let speed = this.flying ? FLY : (sprint && !this.inWater ? SPRINT : WALK);
     if (this.inWater && !this.flying) speed *= 0.55;
 
-    const accel = this.onGround || this.flying || this.inWater ? 14 : 3;
-    const blend = Math.min(1, accel * dt);
-    vx += (wishX * speed - vx) * blend;
-    vz += (wishZ * speed - vz) * blend;
+    if (this.onGround || this.flying || this.inWater) {
+      // Footing (or water, or creative flight): settle quickly to the speed you're asking for.
+      const blend = Math.min(1, 14 * dt);
+      vx += (wishX * speed - vx) * blend;
+      vz += (wishZ * speed - vz) * blend;
+    } else if (fx || fz) {
+      // Airborne: keep your momentum; the keys only nudge you, up to walking speed.
+      const along = vx * wishX + vz * wishZ;
+      const dv = Math.min(AIR_ACCEL * dt, Math.max(0, speed - along));
+      vx += wishX * dv;
+      vz += wishZ * dv;
+    }
 
     if (this.flying) {
       let target = 0;

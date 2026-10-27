@@ -12,7 +12,7 @@ import { encodeFluid } from './fluids.js';
 import { dirIndex } from './shapes.js';
 
 export { CS };
-export const GRAVITY_REACH = 50;  // blocks above a planet's surface where its gravity fades out
+export const GRAVITY_REACH = 120; // blocks above a planet's surface where its gravity has faded out
 const MEDIUM_PLANET = 20;         // half-size of a planet with normal (100%) surface gravity
 const ROUNDNESS = 4;              // superellipsoid exponent: 2 = sphere, higher = boxier
 // Seas: which fluid fills each kind of planet's low ground, and how high (as a fraction of
@@ -183,7 +183,7 @@ export class World extends VoxelGrid {
     const out = [home.center[0], home.center[1], home.center[2]];
     const len = Math.hypot(...out) || 1;
     const dir = out.map((v) => v / len);
-    const dist = home.range + 20;
+    const dist = home.range + 10;
     return {
       position: out.map((v, i) => v + dir[i] * dist),
       toward: dir.map((v) => -v),
@@ -248,19 +248,21 @@ export class World extends VoxelGrid {
   }
 }
 
-// The star and planets for a seed. Gravity: each body pulls at `surfaceG` (1 = normal) out to
-// `full` blocks from its centre (just past its furthest surface point), fading to nothing at
-// `range`. Surface gravity scales with size, like real planets of the same density.
+// The star and planets for a seed. Gravity: each body pulls at `surfaceG` (1 = normal) at
+// ground level, decaying gradually with altitude to nothing `reach` blocks up (`range` is the
+// furthest that can be from its centre). Surface gravity scales with size, like real planets
+// of the same density.
 function makeBodies(seed) {
   const rand = mulberry32(seed ^ 0x5eed);
   const body = (name, kind, R, center) => {
     // Distance to the furthest surface point (a corner, pushed out by the contours).
-    const full = Math.ceil(R * Math.pow(3, 1 / 2 - 1 / ROUNDNESS) * 1.1) + 2;
+    const outer = Math.ceil(R * Math.pow(3, 1 / 2 - 1 / ROUNDNESS) * 1.1) + 2;
+    const reach = kind === 'star' ? 2.5 * GRAVITY_REACH : GRAVITY_REACH;
     return {
       name, kind, R, center, seed: rand() * 1000,
       surfaceG: kind === 'star' ? 2 : R / MEDIUM_PLANET,
-      full,
-      range: full + (kind === 'star' ? 3 * GRAVITY_REACH : GRAVITY_REACH),
+      reach,
+      range: outer + reach,
     };
   };
   const bodies = [body('Sol', 'star', 36, [0, 0, 0])];

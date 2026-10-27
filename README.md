@@ -48,8 +48,9 @@ caching so a refresh always loads the latest files.
 - A seeded solar system in a world that is infinite on all three axes, streamed in cubic 32×32×32 chunks:
   a star and five planets (rocky, verdant, desert, ice) shaped like rounded, contoured cubes, a starfield,
   and drifting, tumbling meteorites you can mine. Distant bodies are visible across the system
-- Every planet has a gravity core: full gravity across its surface (normal on a medium planet, weaker on small
-  ones, stronger on large ones), fading to nothing about 50 blocks up
+- Every planet has a gravity core: full gravity at ground level (normal on a medium planet, weaker on small
+  ones, stronger on large ones), fading gradually with altitude (about half at 20 blocks up, a quarter at 40)
+  to nothing by 120
 - You start on your own small ship, floating near the home planet
 - Water and lava follow Minecraft's flow rules (sources, levels, falling, infinite water, lava hardening into
   obsidian, cobblestone, or stone) but flow toward the local gravity, so they pool on every face of a planet
@@ -59,8 +60,9 @@ caching so a refresh always loads the latest files.
 - Translucent water you can swim in, with an underwater fog effect (and a molten one in lava)
 - Walking, sprinting, jumping, flying, and AABB collision
 - Gravity generators: a full block that pulls toward itself from every side (build a mini planet), and plates
-  and slopes that pull toward their base. Full strength near them (jumping feels normal), fading to nothing
-  at 10 blocks. Away from planets and generators you float in zero-g with a jetpack. Gravity acts on ships too: they fall, land, and are pulled by other ships' generators
+  and slopes that pull toward their base. Full strength near them (jumping feels normal), fading gradually to
+  nothing at 24 blocks. In low gravity (under 15%) or none, your jetpack takes over
+- Momentum: in the air and in space nothing slows you down; keys only add thrust Gravity acts on ships too: they fall, land, and are pulled by other ships' generators
   (never their own; the pull is mutual). A piloted ship's thrusters hold it against gravity
 - Ships are rigid bodies (mass and inertia from their blocks): they tip off ledges, roll off corners, tumble in
   uneven gravity, and collide with friction and a little bounce; ships at rest go to sleep until disturbed

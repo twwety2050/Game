@@ -4,6 +4,7 @@
 // (the star and planets), which pull toward their gravity cores. Each source pulls with a strength in [0, 1]:
 //   - full strength within FULL_RANGE of the block, so walking and jumping feel normal,
 //   - then decaying with distance, reaching zero at RANGE.
+// Pull is full strength near a source and then fades gradually with distance (see decay).
 // Radial blocks (full gravity blocks) pull toward their nearest point from every side.
 // Directional blocks (plates and slopes) pull toward their base, and only on the side their
 // emitter faces.
@@ -17,21 +18,36 @@ import { BLOCKS } from './blocks.js';
 import { applyRotation } from './shapes.js';
 
 export const G = 28;           // acceleration at full strength, blocks/s^2 (players and ships)
-export const FULL_RANGE = 2.5; // blocks from the generator's surface to the body's centre
-export const RANGE = 10;
+export const FULL_RANGE = 2.5; // blocks from a generator's surface to a body's centre at full strength
+export const RANGE = 24;       // blocks from a generator where its pull has faded to nothing
+const BLOCK_SCALE = 6;         // how quickly a generator's pull decays past FULL_RANGE
+const BODY_SCALE = 2;          // a body's decay scale, in multiples of its half-size
 
 const _p = new THREE.Vector3();
 const _d = new THREE.Vector3();
 const _sum = new THREE.Vector3();
 const _part = new THREE.Vector3();
 
-// Strength at `dist` blocks from a source with the given full-strength and cut-off ranges.
-export function falloff(dist, full = FULL_RANGE, range = RANGE) {
-  if (dist <= full) return 1;
-  if (dist >= range) return 0;
-  // Inverse-square decay, faded smoothly to zero at the edge of the range.
-  const fade = 1 - THREE.MathUtils.smoothstep(dist, range * 0.6, range);
-  return (full / dist) ** 2 * fade;
+// Gradual decay past the full-strength zone: inverse-square in the distance beyond it
+// (`past`), as if from a source `scale` blocks further in, then eased to exactly zero over the
+// last 40% of the reach so there's no sudden edge.
+export function decay(past, scale, reach) {
+  if (past <= 0) return 1;
+  if (past >= reach) return 0;
+  const fade = 1 - THREE.MathUtils.smoothstep(past, reach * 0.6, reach);
+  return (scale / (scale + past)) ** 2 * fade;
+}
+
+// Strength of a generator block's pull at `dist` blocks from it.
+export const falloff = (dist) => decay(dist - FULL_RANGE, BLOCK_SCALE, RANGE - FULL_RANGE);
+
+// Strength of body b's pull at offset (dx, dy, dz) from its centre: full at ground level
+// (a little above the nominal surface, for hills), then decaying with altitude.
+function bodyPull(b, dx, dy, dz, dist) {
+  // Distance from the centre to the rounded-cube surface in this direction.
+  const nx = dx / dist, ny = dy / dist, nz = dz / dist;
+  const surface = b.R * Math.pow(nx ** 4 + ny ** 4 + nz ** 4, -1 / 4);
+  return b.surfaceG * decay(dist - surface - 2, BODY_SCALE * b.R, b.reach);
 }
 
 // Pull of one generator block on local point p. Writes the pull direction (unit, grid-local)
@@ -85,7 +101,7 @@ export function gravityAt(wp, world, ships, out = new THREE.Vector3(), exclude =
     _d.set(b.center[0] + 0.5 - wp.x, b.center[1] + 0.5 - wp.y, b.center[2] + 0.5 - wp.z);
     const dist = _d.length();
     if (dist >= b.range || dist < 1e-6) continue;
-    const s = b.surfaceG * falloff(dist, b.full, b.range) * (1 - override);
+    const s = bodyPull(b, -_d.x, -_d.y, -_d.z, dist) * (1 - override);
     if (s <= 0) continue;
     _sum.addScaledVector(_d, s / dist);
     strongest = Math.max(strongest, s);

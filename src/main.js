@@ -681,7 +681,8 @@ function updateStatus() {
   if (!ship || !player.piloting) {
     const { body, altitude } = world.nearestBody(player.worldPosition(tmpA));
     const where = altitude < body.range - body.R ? `${body.name}  ·  ` : '';
-    if (player.zeroG) text = 'ZERO-G  ·  WASD / Space / Shift jetpack';
+    const pct = Math.round(player.gravityStrength * 100);
+    if (player.zeroG) text = `${pct < 1 ? 'ZERO-G' : `${where}Low gravity ${pct}%`}  ·  WASD / Space / Shift jetpack`;
     else if (Math.abs(player.gravityStrength - 1) > 0.03 && !player.flying) text = `${where}Gravity ${Math.round(player.gravityStrength * 100)}%`;
     else if (where && altitude > 3) text = `${body.name}  ·  altitude ${Math.round(altitude)}`;
   }
