@@ -21,10 +21,11 @@ main() {
   local port="${2:-8000}"
 
   command -v git >/dev/null || { echo "Git isn't installed: https://git-scm.com/downloads"; exit 1; }
-  local py
-  if command -v python3 >/dev/null; then py=python3
-  elif command -v python >/dev/null; then py=python
-  else echo "Python 3 isn't installed: https://www.python.org/downloads/"; exit 1; fi
+  local py=""
+  for candidate in python3 python; do
+    if command -v "$candidate" >/dev/null && "$candidate" --version 2>&1 | grep -q "Python 3"; then py="$candidate"; break; fi
+  done
+  [ -n "$py" ] || { echo "Python 3 isn't installed: https://www.python.org/downloads/"; exit 1; }
 
   if [ ! -d "$dir/.git" ]; then
     echo "Downloading the game into $dir ..."
@@ -37,8 +38,8 @@ main() {
   local server=$!
   trap 'kill "$server" 2>/dev/null; exit 0' INT TERM
   trap 'kill "$server" 2>/dev/null' EXIT
-  sleep 1
-  kill -0 "$server" 2>/dev/null || exit 1
+  sleep 2
+  kill -0 "$server" 2>/dev/null || { echo "The web server didn't start (see the message above)."; exit 1; }
   echo "Checking GitHub for updates every ${interval}s."
 
   while true; do

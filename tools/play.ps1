@@ -21,10 +21,20 @@ function Stamp { (Get-Date).ToString('HH:mm:ss') }
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
   Write-Host "Git isn't installed: https://git-scm.com/downloads"; exit 1
 }
+# Find a Python 3 that actually runs. (Windows has a fake "python" command that only opens the
+# Microsoft Store, so just finding the command isn't enough.)
 $py = $null; $pyArgs = @()
-if (Get-Command py -ErrorAction SilentlyContinue) { $py = 'py'; $pyArgs = @('-3') }
-elseif (Get-Command python -ErrorAction SilentlyContinue) { $py = 'python' }
-else { Write-Host "Python 3 isn't installed: https://www.python.org/downloads/"; exit 1 }
+foreach ($candidate in @(@('py', '-3'), @('python'), @('python3'))) {
+  if (-not (Get-Command $candidate[0] -ErrorAction SilentlyContinue)) { continue }
+  $extra = @($candidate | Select-Object -Skip 1)
+  try { $version = & $candidate[0] @extra --version 2>&1 | Out-String } catch { continue }
+  if ($LASTEXITCODE -eq 0 -and $version -match 'Python 3') { $py = $candidate[0]; $pyArgs = $extra; break }
+}
+if (-not $py) {
+  Write-Host "Python 3 isn't installed (or only the Microsoft Store shortcut is)."
+  Write-Host "Install it from https://www.python.org/downloads/ and tick 'Add python.exe to PATH', then run this again."
+  exit 1
+}
 
 if (-not $Dir) {
   $here = Split-Path -Parent $PSScriptRoot
@@ -39,9 +49,12 @@ if (-not (Test-Path (Join-Path $Dir '.git'))) {
 Set-Location $Dir
 git checkout -q $Branch
 
+if (-not (Test-Path 'tools/serve.py')) {
+  Write-Host "$Dir doesn't have tools\serve.py. Update it with: cd `"$Dir`"; git pull"; exit 1
+}
 $server = Start-Process -FilePath $py -ArgumentList ($pyArgs + @('tools/serve.py', '--port', $Port)) -NoNewWindow -PassThru
-Start-Sleep -Seconds 1
-if ($server.HasExited) { exit 1 }
+Start-Sleep -Seconds 2
+if ($server.HasExited) { Write-Host "The web server didn't start (see the message above)."; exit 1 }
 Write-Host "Checking GitHub for updates every $Interval s."
 
 try {
