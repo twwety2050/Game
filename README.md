@@ -4,14 +4,41 @@ A Minecraft-style voxel sandbox that runs in the browser, built with [Three.js](
 
 ## Run it
 
-ES modules need to be served over HTTP (opening `index.html` directly from disk won't work):
+You need [Git](https://git-scm.com/downloads), [Python 3](https://www.python.org/downloads/), a desktop browser,
+and an internet connection (Three.js loads from a CDN).
 
-```sh
-python3 -m http.server 8000
-# then open http://localhost:8000
+### Play and stay up to date (recommended)
+
+The `tools/play` scripts serve the game and check GitHub every 30 seconds, pulling new versions as they're pushed.
+When it says "Updated", refresh your browser.
+
+**Windows:** clone once, then double-click `tools\play.bat` (or run it from a terminal):
+
+```bat
+git clone -b claude/minecraft-clone-3mer7c https://github.com/twwety2050/Game.git %USERPROFILE%\VoxelCraft
+%USERPROFILE%\VoxelCraft\tools\play.bat
 ```
 
-Any static file server works (`npx serve`, VS Code Live Server, GitHub Pages, …).
+**macOS / Linux:**
+
+```sh
+git clone -b claude/minecraft-clone-3mer7c https://github.com/twwety2050/Game.git ~/VoxelCraft
+~/VoxelCraft/tools/play.sh
+```
+
+Then open http://localhost:8000. Stop with Ctrl+C. Options: `tools/play.sh [folder] [port]` and
+`INTERVAL=60 tools/play.sh` (Windows: `play.bat -Port 8001 -Interval 60`). If you edit files in the folder yourself,
+updates that would overwrite your changes are skipped, and the script tells you how to discard them.
+
+### Just serve it
+
+```sh
+python3 tools/serve.py            # http://localhost:8000; --port 8001 to change it, --lan for other devices
+```
+
+ES modules must be served over HTTP: opening `index.html` directly from disk won't work. Any static file server
+works (`python3 -m http.server`, `npx serve`, VS Code Live Server, …); `tools/serve.py` also turns off browser
+caching so a refresh always loads the latest files.
 
 ## Features
 
@@ -86,3 +113,5 @@ Any static file server works (`npx serve`, VS Code Live Server, GitHub Pages, �
 | `src/textures.js` | Procedural texture atlas |
 | `src/noise.js` | Seeded simplex noise and hashing |
 | `src/hud.js` | Hotbar and debug overlay |
+| `tools/serve.py` | Local web server with caching disabled |
+| `tools/play.sh`, `tools/play.ps1`, `tools/play.bat` | Serve the game and keep it updated from GitHub |
